@@ -230,4 +230,415 @@
 ## Dependencies Path
 - ![alt text](image-25.png)
 
+## Wireup dependencies between modules
+- DI allows an object to receive its dependencies from an external source than creating one themselves.
+- Promotes loose coupling and enhances testability.
+- ASP.NET Core has built in DI container.
+- DI container is in Program.cs and handles lifecycle of these services, ensuring they are instantiated and disposed off correctly.
+- AddTransient: Creates a new instance of the service each time it is requested.
+- AddScoped: Creates new instance of service per request.
+- AddSingleTon: Creates a single instance of service throughout the lifetime of the application
+- ![alt text](image-26.png)
+- ![alt text](image-27.png)
+- ![alt text](image-28.png)
+- Please note we will create extension methods within each of the module like this
+```c#
+namespace Catalog
+{
+    public static class CatalogModule
+    {
+        public static IServiceCollection AddCatalogModule(this IServiceCollection services, IConfiguration configuration)
+        {
+            //Add services to the container
+            //services
+            //    .AddApplicationServices()
+            //    .AddInfrastructureServices(configuration)
+            //    .AddApiServices(configuration);
+            return services;
+        }
+    }
+}
 
+```
+- Then we will register this in Program.cs file of Api Project
+```c#
+builder.Services
+    .AddCatalogModule(builder.Configuration)
+    .AddBasketModule(builder.Configuration)
+    .AddOrderingModule(builder.Configuration);
+
+```
+- Also please note that all of individual modules will require us to download nuget packages related to Microsoft.DependencyInjection.
+- Rather than download these nuget packages for every project, we can download these nuget packages for the shared project and add reference for the shared project in each of our modules.
+- This sort of centralizes our nuget package management within the shared module.
+
+## Asp.net middleware and Http Request pipeline
+- Middleware is a software that is assembled into an application pipeline to handle requests and responses.
+- Each component in the pipeline can either handle a request or pass it on to the next middleware component.
+- Middleware is a chain of delegates that can process an HttpRequest on its way in and HTTP response on its way out.
+- This allows for Authentication, Logging and Error Handling.
+- Aspnet core HTTP Request pipeline is a sequence of middleware components that process incoming requests and outgoing responses.
+- ![alt text](image-29.png)
+- ![alt text](image-30.png)
+- HSTS (HTTP Strict Transport Security) middleware is a security feature used in web applications to enforce secure connections. 
+- When implemented, it ensures that browsers only interact with your website over HTTPS, preventing protocol downgrade attacks and cookie hijacking
+
+```c#
+//Configure the HTTP request pipeline
+
+//Use Static files
+app.UseStaticFiles();
+
+//Use Routing
+app.UseRouting();
+
+//add authentication
+app.UseAuthentication();
+
+//add authorization
+app.UseAuthorization();
+
+//define endpoints
+app.UseEndpoints(endpoints =>
+{
+    endpoints.MapControllers();
+});
+
+
+```
+- Think of Program.cs file into 2 parts: before building the application and second is configuring HTTP request pipeline after the application is built
+- So before builder.Build() method we configure all services and dependencies.
+- Then we call builder.Build() which builds the application
+- Then we configure the HTTP request pipeline to configure how incoming requests and outgoing responses are handled.
+
+
+## WebApplication class
+- This class implements several interfaces like IHost, IApplicationBuilder, IEndpointRouterBuilder, IAsyncDisposable.
+- Use it like this in each of the modules:
+```c#
+public static IApplicationBuilder UseCatalogModule(this IApplicationBuilder builder)
+{
+    //Add services to the container
+    //services
+    //    .AddApplicationServices()
+    //    .AddInfrastructureServices(configuration)
+    //    .AddApiServices(configuration);
+    return builder;
+}
+
+```
+- Integrate it in the Program.cs file of Api Project like this:
+```c#
+app
+    .UseCatalogModule()
+    .UseBasketModule()
+    .UseOrderingModule();
+```
+
+## GlobalUsings.cs 
+- Rather than clutter all our files with multiple using statements, we can create a GlobalUsings.cs file in our project and enclose all of our common using statements like this:
+```c#
+global using Catalog;
+global using Basket;
+global using Ordering;
+
+```
+
+## Developing Catalog Module
+- ![alt text](image-31.png)
+- Domain analysis of Catalog Module should be done in 4 key areas:
+  1. Domain Models ( like Product Domain Model)
+  2. Application Use Cases (Listing Products, Categories)
+  3. Rest API Endpoints (Get Product /product/{id}, Update Product, Add Product)
+  4. Underlying Data Structures.(PostGres SQL Relational DB)
+  5. CodeFirst Approach
+
+## Catalog Architecture
+- CQRS Pattern
+- Mediator Pattern
+- Minimal APIs and Routing in ASP.NET 8: ASP.NET 8 Minimal API simplify endpoint definition, provide lightweight syntax for routing and handling HTTP Requests
+- Carter Library: Used for routing and handling HTTP requests making it easier to define API endpoints with clean and concise code.
+- Mapster: Fast Configurable Object Mapper that simplifies the task of mapping objects.  
+- FluentValidation: Used for input validation. 
+
+## Folder Structure
+- ![alt text](image-32.png)
+
+## Develop Shared Domain for Tactical DDD Abstraction.
+- Eric Evans published his book in 2003.
+- DDD means take a big problem and break it down into smaller problems and focus on each one.
+- DDD types: Strategic and Tactical DDD 
+- Strategic DDD: Understanding and modeling the business domains, subdomains etc.
+- Tactical DDD: Implementation details and provides design patterns.
+- Includes patterns like Entities, Value Objects, Aggregates etc. 
+- DDD: Domain, SubDomain(specific expertise in main domain), Ubiquitous language(common language between developers and business), bounded context(logical boundary) and context mapping(identify bounded contexts with their logical boundaries). 
+- Tactical DDD: Focuses on domain and domain logic
+- Focuses on entities, value objects, aggregates and aggregate root.
+- Entity is an object that is identified by its id (like a Product(ProductID) or an Order(OrderID))
+- Value Object: Carries no concept of identity, has no identity: used to encapsulate complex attributes. For e.g Address(In an order, we need an address but it doesnot define the identity of the order)
+- Aggregates: cluster of domain objects treated as a single Unit. Defines a boundary around related objects.
+- For e.g Order can be an aggregate containing OrderItems, PaymentDetails etc. Consistency of an order like total price calculation, stock validations is maintained in Aggregate boundaries. 
+- Aggregate Root: Main entity in an aggregate through which external objects interact with the aggregate. 
+- For e.g Order Aggregate: Order itself is an aggregate root, External objects interact with Order to affect changes within the Aggregate.
+- ![alt text](image-33.png)
+
+## Common Entity in Shared Project to be implemented by all entities
+```c#
+
+//For Entity of Type T, specify the ID
+public interface IEntity<T> : IEntity
+{
+    public T Id { get; set; }
+}
+
+
+//Base properties for all entities
+public interface IEntity
+{
+    public DateTime? CreatedAt { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime? LastModified { get; set; }
+    public string? LastModifiedBy { get; set; }
+}
+
+
+//Implement IEntity and specify Base class for all entities
+//Serves as base class for all entities providing common properties like Id, CreatedAt, LastModified etc
+public abstract class Entity<T> : IEntity<T>
+{
+    public T Id { get ; set ; }
+    public DateTime? CreatedAt { get ; set; }
+    public string? CreatedBy { get ; set ; }
+    public DateTime? LastModified { get; set; }
+    public string? LastModifiedBy { get; set; }
+}
+
+
+
+```
+
+## Domain Events 
+- Significant occurrences within the domain that we want to track
+- For e.g an event like ProductPriceChanged would be a domain event indicating price of product has changed. 
+
+## Mediatr INotification Interface
+- Mediatr allows us to send messages(commands, events) within our app.
+- INotification is an interface in Mediatr used to define events that can be published and handled asynchronously. 
+- Raising and Dispatching Domain Events.
+- Creating a base interface for Domain Events 
+```c#
+ public interface IDomainEvent: INotification
+ {
+     Guid EventId => Guid.NewGuid();
+     public DateTime OccurredOn => DateTime.Now;
+
+     public string EventType => GetType().AssemblyQualifiedName;
+ }
+
+```
+- ![alt text](image-34.png)
+- Creating interfaces and implementation for creating and returning domain events 
+```c#
+public interface IAggregate<T>:IAggregate,IEntity<T>
+{
+
+}
+public interface IAggregate: IEntity
+{
+    IReadOnlyList<IDomainEvent> DomainEvents { get; }
+    IDomainEvent[] ClearDomainEvents();
+}
+
+
+//Main the List of Domain Events for the Aggregate
+public abstract class Aggregate<TId> : Entity<TId>, IAggregate<TId>
+{
+    private readonly List<IDomainEvent> _domainEvents = new();
+    public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();
+
+    public void AddDomainEvent(IDomainEvent domainEvent)
+    {
+        _domainEvents.Add(domainEvent);
+    }
+
+    public IDomainEvent[] ClearDomainEvents()
+    {
+        IDomainEvent[] dequeuedEvents = _domainEvents.ToArray();
+        _domainEvents.Clear();
+        return dequeuedEvents;
+    }
+    
+}
+
+```
+
+## Develop Catalog Domain with Product Domain Entity Models 
+- Creating the Product Entity:
+```c#
+public class Product : Entity<Guid>
+{
+    public string Name { get; set; } = default!;
+    public List<string> Category { get; set; } = new();
+    public string Description { get; set; } = default!;
+    public string ImageFile { get; set; } = default!;
+    public decimal Price { get; set; }
+}
+
+```
+
+## Anemic and Rich Domain Model Entity
+- Anemic entities are those which have little or no business logic
+- Data structures with getters and setters 
+- Business rules and behaviors are implemented outside the entity in service layer 
+- Example is ![alt text](image-35.png)
+- Rich Domain Model entity encapsulate both data and behavior. 
+- They have enriched entities with methods that embody business rules and domain logic 
+- Example is ![alt text](image-36.png)
+- In Anemic domain model, business logic is scattered across services which can cause issues with maintainability and understanding business logic.
+- Rich domain model encapsulate business logic within entities. Can be complex to design but is more maintainable.
+- So for Orders we should create a Rich Domain Model like this: ![alt text](image-37.png)
+  
+
+## Developing Rich Domain Model for Product Entity
+```c#
+public class Product : Entity<Guid>
+{
+    //make property setters private to enforce encapsulation
+    public string Name { get; private set; } = default!;
+    public List<string> Category { get; private set; } = new();
+    public string Description { get; private set; } = default!;
+    public string ImageFile { get; private set; } = default!;
+    public decimal Price { get; private set; }
+
+    //Add create method for initializing product entities.
+    public static Product Create(Guid id, string name, List<string> category, string description, string imageFile, decimal price)
+    {
+        //Validate inputs
+        //Ensures product entity is always created in a valid state
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+        var product = new Product()
+        {
+            Id = id,
+            Name = name,
+            Category = category,
+            Description = description,
+            ImageFile = imageFile,
+            Price = price
+        };
+        return product; 
+    }
+    
+    //Add an update method for modifying Product entities.
+    public void Update(string name, List<string> category, string description, string imageFile, decimal price)
+    {
+        //Validate inputs
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+
+        Name = name;
+        Category = category;
+        Description = description;
+        ImageFile = imageFile;
+        Price = price;
+
+        //TODO: if price is changed, raise ProductPriceChanged domain event
+    }
+}
+
+```
+
+## Domain vs Integration Events 
+- Domain represent something that happened in the past and other parts of the same service boundary in the same domain need to react to these changes.
+- Domain event is a business event that occurs within the domain model. Represents side effect of domain operation.
+- When an order is placed, an OrderPlaced event is triggered. 
+- Trigger side effects and notify other parts of the system about changes in the domain.
+- Communicate change to external handlers which may trigger further events.
+- ![alt text](image-38.png)
+- Domain Events are published and consumed in the same domain. 
+- They are sent using an in-memory message bus
+- Happen in the same domain or microservice
+- Example is OrderPlaced Event 
+- Indicate something has happened in the aggregate 
+- Integration Events are used to communicate state changes or events between different contexts or microservices
+- Sent via Message Broker.
+- For e.g after OrderPlacedEvent, an OrderPlacedIntegrationEvent may be published to RabbitMq that is consumed by other microservices like Shipping.
+- ![alt text](image-39.png)
+- Domain events happen synchronously whereas Integration Events are sent asynchronously.
+### Key Differences between class and record
+- Immutability:
+    Classes are mutable by default, allowing their state to change.
+    Records are immutable by default, making them ideal for scenarios where you need read-only data.
+- Default Equality:
+    Classes use reference equality by default, which means two objects are considered equal if they reference the same memory location.
+    Records use value equality by default, meaning two records are considered equal if their values are the same.
+- Syntax:
+    Classes typically require more boilerplate code to define properties and constructors.
+    Records provide a concise syntax for defining data objects, especially with positional parameters.
+
+```c#
+namespace Catalog.Products.Events
+{
+    public record ProductPriceChangedEvent(Product product) : IDomainEvent;
+}
+
+```
+
+## Change Product from Entity to Aggregate to allow raising Domain Events 
+```c#
+public class Product : Aggregate<Guid>
+{
+    //make property setters private to enforce encapsulation
+    public string Name { get; private set; } = default!;
+    public List<string> Category { get; private set; } = new();
+    public string Description { get; private set; } = default!;
+    public string ImageFile { get; private set; } = default!;
+    public decimal Price { get; private set; }
+
+    //Add create method for initializing product entities.
+    public static Product Create(Guid id, string name, List<string> category, string description, string imageFile, decimal price)
+    {
+        //Validate inputs
+        //Ensures product entity is always created in a valid state
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+        var product = new Product()
+        {
+            Id = id,
+            Name = name,
+            Category = category,
+            Description = description,
+            ImageFile = imageFile,
+            Price = price
+        };
+        product.AddDomainEvent(new ProductCreatedEvent(product));
+        return product; 
+    }
+
+   
+    
+    //Add an update method for modifying Product entities.
+    public void Update(string name, List<string> category, string description, string imageFile, decimal price)
+    {
+        //Validate inputs
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+
+        Name = name;
+        Category = category;
+        Description = description;
+        ImageFile = imageFile;
+        Price = price;
+
+
+        //if price is changed, raise ProductPriceChanged domain event
+        if(Price != price)
+        {  
+            Price = price;
+            AddDomainEvent(new ProductPriceChangedEvent(this));
+        }
+        
+    }
+}
+
+```
