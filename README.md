@@ -678,3 +678,302 @@ public class Product : Aggregate<Guid>
 - In cloud native application, they are decoupled from the applications.
 
 ## We will use docker-compose to setup our PostgreSql database
+
+## Develop Shared and Catalog Data-Infrastructure with EF Core CodeFirst
+- Code First Approach, Migrations and Postgresql
+- Install EF Core Nuget packages in shared infrastructure
+- Develop EFCore DBContext for storing entities in Catalog Infrastructure
+- EFCore Postgresql connection string in appsettings.json 
+- Create and apply EFCore Migrations for CatalogDbContext.
+- Auto Migrate EFCore entities to Postgresql DB on application startup
+- Seed EShopDb Product Data on application startup just after UseMigration 
+- **EFCore Interceptors**: Save Changes Interceptor for Auditing Entities.
+- Dispatch Domain Events with EFCore SaveChanges interceptor.
+- EFCore is a lightweight data access technology
+- It can work as ORM
+- Install Postgressql NpgSql Database Provider nuget packages. 
+- In EFCore we have EntityFrameworkCore.Design and EntityFrameworkCore.Tools packages
+- ![alt text](image-45.png)
+- ![alt text](image-46.png)
+- ![alt text](image-47.png)
+- ![alt text](image-49.png)
+- ![alt text](image-50.png)
+- To automatically apply migrations use UseMigration command 
+- We can define SeedDataAsync method
+  
+## Setting up DbContext for Catalog Module 
+```c#
+public class CatalogDbContext: DbContext
+{
+    public CatalogDbContext(DbContextOptions options ):base(options)
+    {
+        
+    }
+
+    public DbSet<Product> Products => Set<Product>();
+}
+
+```
+- In Entity Framework Core (EF Core), Set<T> is used to interact with a specific entity type in the database. It's part of the DbContext class, and it provides a way to query and save instances of the entity type T.
+- When you call Set<T>() on a DbContext instance, it returns a DbSet<T> object, which represents the collection of all entities in the context, or that can be queried from the database, of the specified type.
+- In the CatalogDbContext class, we use .Set<Product>() to get all Product entities from the database.
+- Using Set<T>() is particularly useful when you want to write generic methods that can operate on any entity type without knowing the specific DbSet property names.
+
+## Mapping Domain Objects to EFCore Columns
+- We will use EntityTypeConfiguration for this purpose 
+- EntityTypeConfiguration is a class used in Entity Framework (EF) Core to configure the mappings between your entity classes and the database schema. This configuration class is especially useful when you want to customize the database schema without relying solely on data annotations.
+- Create a ProductConfiguration Class like this:
+```c#
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+    public void Configure(EntityTypeBuilder<Product> builder)
+    {
+        builder.HasKey(x=>x.Id); 
+        builder.Property(x => x.Name).HasMaxLength(50).IsRequired();
+        builder.Property(x=>x.Category).IsRequired();
+        builder.Property(x => x.Description).HasMaxLength(200);
+        builder.Property(x=>x.ImageFile).HasMaxLength(100);
+        builder.Property(x=>x.Price).IsRequired();
+        
+    }
+}
+
+```
+- We can apply configurations in our Db Context like this
+```c#
+public class CatalogDbContext: DbContext
+{
+    public CatalogDbContext(DbContextOptions options):base(options)
+    {
+        
+    }
+
+    public DbSet<Product> Products => Set<Product>();
+
+    protected override void OnModelCreating(ModelBuilder builder)
+    {        
+        //For Data Isolation, we use separate schema model, so we define a schema here
+        builder.HasDefaultSchema("catalog");
+        builder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+        base.OnModelCreating(builder);
+    }
+}
+
+
+```
+- Register Catalog Db Context
+```c#
+services.AddDbContext<CatalogDbContext>(options =>
+options.UseNpgsql(connectionString));
+
+```
+
+## EFCore Migrations
+- Used for managing database schema changes in an application's lifecycle.
+- Enable a developer to evolve a database schema in a controlled and consistent way in line with domain model changes
+- Migrations provide a way to incrementally update the database schema so that it is in sync with application's data model 
+- EFCore compares current model against snapshot of the previous model to find differences and generate migration source files.
+- We have EF Migration History table.
+- ![alt text](image-51.png)
+- We need to setup the startup project correctly before running and creating migrations
+- This is because EF Core tools will look for database related configurations like connection strings in the startup project 
+- In our case, Api Project has appsettings.json which has connection string 
+- We also need to set the Target Project correctly.
+```shell
+Add-Migration InitialCreate -OutputDir Data/Migrations -Project Catalog -StartupProject Api
+```
+- When we are running migrations, we dont want to keep calling the Update-database command again and again.
+- So we will run create a method in UseCatalogModule to run the migrations on application startup 
+```c#
+public static IApplicationBuilder UseCatalogModule(this IApplicationBuilder builder)
+{
+    //Configure the HTTP request pipeline
+    //builder
+    //    .UseApplicationServices()
+    //    .UseInfrastructureServices(configuration)
+    //    .UseApiServices(configuration);
+   
+    InitializeDatabaseAsync(builder).GetAwaiter().GetResult();  
+    return builder;
+}
+
+private static async Task InitializeDatabaseAsync(IApplicationBuilder builder)
+{
+    using var scope = builder.ApplicationServices.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<CatalogDbContext>();
+    //no need to call update-database command while running migrations
+    await context.Database.MigrateAsync();
+}
+
+```
+- We want to create a generic extension method that will automatically apply migrations for all DbContexts(CatalogDbContext, BasketDbContext etc)
+- We will create a static Extensions class in Shared folder and create the method like this
+```c#
+public static class Extensions
+{
+    public static IApplicationBuilder UseMigration<TContext>(this IApplicationBuilder app) 
+        where TContext:DbContext
+    {
+        MigrateDatabaseAsync<TContext>(app.ApplicationServices).GetAwaiter().GetResult();
+        return app;
+    }
+
+    private static async Task MigrateDatabaseAsync<TContext>(IServiceProvider applicationServices) where TContext : DbContext
+    {
+        using var scope = applicationServices.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<TContext>();
+        //no need to call update-database command while running migrations
+        await context.Database.MigrateAsync();
+    }
+}
+
+```
+
+- Now we can modify the UseCatalogModule extension method as follows:
+```c#
+public static IApplicationBuilder UseCatalogModule(this IApplicationBuilder builder)
+{
+    //Configure the HTTP request pipeline
+
+    //1.Use Api Endpoint services
+
+    //2.Use Application Use Case services
+
+    //3.Use Data - Infrastructure services
+    builder.UseMigration<CatalogDbContext>();
+
+    //InitializeDatabaseAsync(builder).GetAwaiter().GetResult();  
+    return builder;
+}
+
+```
+- SeedData to database
+- Use the following code
+```c#
+public static IApplicationBuilder UseMigration<TContext>(this IApplicationBuilder app) 
+    where TContext:DbContext
+{
+    MigrateDatabaseAsync<TContext>(app.ApplicationServices).GetAwaiter().GetResult();
+    SeedDataAsync(app.ApplicationServices).GetAwaiter().GetResult();
+    return app;
+}
+
+private static async Task SeedDataAsync(IServiceProvider serviceProvider)
+{
+    using var scope = serviceProvider.CreateScope();
+    var seeders = scope.ServiceProvider.GetServices<IDataSeeder>();
+    foreach (var seeder in seeders)
+    {
+        await seeder.SeedAllAsync();    
+    }
+}
+
+```
+- Create a Catalog Data Seeder
+```c#
+public class CatalogDataSeeder(CatalogDbContext dbContext) : IDataSeeder
+{
+
+    public async Task SeedAllAsync()
+    {
+        if(!await dbContext.Products.AnyAsync())
+        {
+            await dbContext.Products.AddRangeAsync(InitialData.Products);
+            await dbContext.SaveChangesAsync();
+        }
+    }
+}
+
+```
+- Data will be seeded by following code
+```c#
+public static class InitialData
+{
+    public static IEnumerable<Product> Products =>
+        new List<Product>()
+        {
+            Product.Create(new Guid("5334c996-8457-4cf0-815c-ed2b77c4ff61"), "IPhone X", ["category1"], "Long description", "imagefile", 500),
+            Product.Create(new Guid("c67d6323-e8b1-4bdf-9a75-b0d0d2e7e914"), "Samsung 10", ["category1"], "Long description", "imagefile", 400),
+            Product.Create(new Guid("4f136e9f-ff8c-4c1f-9a33-d12f689bdab8"), "Huawei Plus", ["category2"], "Long description", "imagefile", 650),
+            Product.Create(new Guid("6ec1297b-ec0a-4aa1-be25-6726e3b51a27"), "Xiaomi Mi", ["category2"], "Long description", "imagefile", 450)
+        };
+}
+
+```
+
+## EFCore Interceptors 
+- Interceptors in EFCore enable the interception, modification or suppression of EFCore operations
+- This includes low level database operations such as executing a command as well as higher level operations such as calls to SaveChanges()
+- The SaveChanges() and SaveChangesAsync() interception points are used to execute custom logic when saving changes to the database. 
+- These interception points are defined by ISaveChangesInterceptor interface .
+- Interception of save changes can be used for creating audit records. 
+- This is useful for maintaining a history of who changed an entity and when. 
+- Before saving changes, we can iterate through the changed entities in DbContext and log and store audit information like timestamps or user identifiers. 
+
+## Registering Interceptors 
+- AddInterceptors while configuring DbContext.
+- Use the OnConfiguring Method of DbContext.
+- ![alt text](image-52.png)
+- EFCore provides a SaveChangesInterceptor base class with methods as convenience.
+- Create Interceptor as follows:
+```c#
+  public class AuditableEntityInterceptor:SaveChangesInterceptor
+ {
+     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
+     {
+         UpdateEntities(eventData.Context);
+         return base.SavingChanges(eventData, result);
+     }
+
+     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+     {
+         UpdateEntities(eventData.Context);
+         return base.SavingChangesAsync(eventData, result, cancellationToken);
+     }
+
+     private void UpdateEntities(DbContext? context)
+     {
+         if (context == null) return;
+         foreach(var entry in context.ChangeTracker.Entries<IEntity>())
+         {
+             if(entry.State == EntityState.Added)
+             {
+                 entry.Entity.CreatedBy = "nishant";
+                 entry.Entity.CreatedAt = DateTime.UtcNow;
+             }
+
+             if(entry.State == EntityState.Added || entry.State == EntityState.Modified || entry.HasChangedOwnedEntities())
+             {
+                 entry.Entity.LastModifiedBy = "nishant";
+                 entry.Entity.LastModified = DateTime.UtcNow;
+             }
+         }
+     }
+ }
+
+ public static class Extensions
+ {
+     public static bool HasChangedOwnedEntities(this EntityEntry entry) =>
+         entry.References.Any(r =>
+         r.TargetEntry != null
+         && r.TargetEntry.Metadata.IsOwned() &&
+         (r.TargetEntry.State == EntityState.Added || r.TargetEntry.State == EntityState.Modified));
+ }
+
+
+```
+- Register the Interceptor in AddCatalogModule
+```c#
+ var connectionString = configuration.GetConnectionString("Database");
+
+ services.AddDbContext<CatalogDbContext>(options =>
+ {
+     options.AddInterceptors(new AuditableEntityInterceptor());
+     options.UseNpgsql(connectionString);
+ });
+
+ services.AddScoped<IDataSeeder, CatalogDataSeeder>();
+
+ return services;
+
+```
