@@ -642,3 +642,39 @@ public class Product : Aggregate<Guid>
 }
 
 ```
+
+## Data Management of Modular Monolith
+- Why Data Isolation is important ?
+- Key aspect of modular monolith
+- Maintainability
+- Scalability
+- Security
+- Conflict Reduction (ensures data integrity)
+
+### Data Isolation Strategies
+- Separate Table (simple to implement and manage and easy to query, but have limited isolation and it is hard to enforce boundaries)
+- Separate Schema (balance between isolation and manageability, easy to enforce boundaries but is more complex and shared databases can be a bottleneck)
+- Separate Database (better isolation, independent scaling and maintenance, but higher cost of operation and cross module queries become complex)
+- Separate Persistence (choose best storage technology but has significant complexity and operational overhead)
+
+## Why DB schema separation is important 
+- In MM architecture, maintaining clear boundaries between modules is important.
+- Database schema separation is a practice that helps achieve this by isolating data of each module within its own schema.
+- We will follow separate schema approach. Makes it clear which data belongs to which module.
+- ![alt text](image-40.png)
+- Changes in one module schema donot affect other 
+- Reduces complexity of cross module queries.
+- Shared database resources can be optimized more effectively. 
+- EFCore helps us to configure separate schema approach easily.
+- ![alt text](image-41.png)
+- We will use multiple DBContexts for each of our modules
+- ![alt text](image-42.png)
+
+## What are backing services for cloud-native architectures?
+- They are external components that applications depend on for their operation
+- ![alt text](image-44.png)
+- Provide support for various functionalities like storage, messaging, caching and authentication 
+- These resources are external to the application
+- In cloud native application, they are decoupled from the applications.
+
+## We will use docker-compose to setup our PostgreSql database
