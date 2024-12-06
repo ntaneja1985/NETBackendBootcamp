@@ -977,3 +977,436 @@ public static class InitialData
  return services;
 
 ```
+
+## Dispatching Domain Events using EFCore Interceptor
+- Domain events represent something that happened in the past and other parts in the same service boundary within the same domain need to react to those changes.
+- Domain events are business events that occur within the domain model. They represent the side-effect of a domain operation.
+- They help us to achieve consistency within the aggregates in the same domain. 
+- When an order is placed, an OrderPlaced event is triggered. 
+- They also trigger side-effects and notify other parts of the system. 
+- Basically, we encapsulate the event details and dispatch them to interested parties. 
+- ![alt text](image-54.png)
+- Create the DispatchDomainEvents Interceptor like this 
+```c#
+public class DispatchDomainEventsInterceptor(IMediator mediator) :SaveChangesInterceptor
+{
+    public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
+    {
+        DispatchDomainEvents(eventData.Context).GetAwaiter().GetResult();   
+        return base.SavingChanges(eventData, result);
+    }
+
+    
+    public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+    {
+        await DispatchDomainEvents(eventData.Context);
+        return await base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private async Task DispatchDomainEvents(DbContext? context)
+    {
+        if(context == null) return;
+
+        //Get the aggregates
+        var aggregates = context.ChangeTracker
+                         .Entries<IAggregate>()
+                         .Where(x => x.Entity.DomainEvents.Any())
+                         .Select(x => x.Entity);
+
+        //get the domain events
+        var domainEvents = aggregates
+                           .SelectMany(x => x.DomainEvents)
+                           .ToList();
+
+        //Clear the domain events
+        aggregates.ToList().ForEach(x=>x.ClearDomainEvents());
+
+        //Publish the domain events
+        foreach (var domainEvent in domainEvents)
+        {
+            await mediator.Publish(domainEvent);
+        }
+                         
+    }
+}
+
+```
+- To register the domain events interceptor in Catalog Module do this 
+```c#
+public static IServiceCollection AddCatalogModule(this IServiceCollection services, IConfiguration configuration)
+{
+    //Add services to the container
+
+    //Api Endpoint services
+
+    //Application Use Case services
+    services.AddMediatR(config =>
+    {
+        config.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly());
+    });
+
+    //Data - Infrastructure services
+    var connectionString = configuration.GetConnectionString("Database");
+    services.AddScoped<ISaveChangesInterceptor, AuditableEntityInterceptor>();
+    services.AddScoped<ISaveChangesInterceptor,DispatchDomainEventsInterceptor>();
+
+    services.AddDbContext<CatalogDbContext>((sp,options) =>
+    {
+        //options.AddInterceptors(new AuditableEntityInterceptor(), 
+        //    new DispatchDomainEventsInterceptor());
+        options.AddInterceptors(sp.GetServices<ISaveChangesInterceptor>());
+        options.UseNpgsql(connectionString);
+    });
+
+    services.AddScoped<IDataSeeder, CatalogDataSeeder>();
+
+    return services;
+}
+
+```
+
+## Application Use case development using CQRS and MediatR 
+- We will create abstraction on MediatR for CQRS- Command and Query separation.
+
+## CQRS Pattern 
+- ![alt text](image-55.png)
+- Using CQRS, we want to separate the Read and Write operations with separate databases
+- We want to avoid complex queries and get rid of inefficient joins. 
+- Commands: change the state of the data in the application 
+- Queries: handle complex join operations and return result without changing state of data 
+- In real world we have high volume data requirements. 
+- Single database can cause bottlenecks. 
+- Use CQRS and Event Sourcing patterns to improve performance.
+- Helps with scalability also. 
+- In traditional monolithic approach with single database, if we have a query that needs to join more than 10 tables, it will lock the database due to latency in query computation. 
+- Performing CRUD operations with complex validations will cause lock database operations. 
+- We need to separate our read from writes and use 2 databases. 
+- NoSql(denormalized) for reading and relational db(fully normalized) for writing for strong consistency.
+
+## Logical and Physical implementation of CQRS.
+### Logical Implementation
+- Split operations not databases. Separate read from write at code level but not at db level.
+- even though same db is used, the path of reading and writing are different. 
+- We can have different models for querying and writing data. 
+
+### Physical Implementation 
+- Separate databases. Split the read and write operation not just at code level but also at db level.
+- However, it can cause data consistency and synchronization problems. 
+
+**We will implement logical implementation of CQRS using MediatR library**
+
+## MediatR library 
+- .NET library that implements the mediator pattern. 
+- Has IRequest interface which is used to define a request, which can either be a command or query. The return type can be given as a generic parameter.
+- Handlers inherit from IRequestHandler<TRequest, TResponse> where TRequest is a type of command or query and TResponse is the return type. 
+- To make distinction between commands and queries clearer, we can define 2 custom interfaces:
+```c#
+public interface ICommand<TResult>: IRequest<TResult> {}
+public interface IQuery<TResult> : IRequest<TResult> {}
+
+```
+- In ASP.NET Core using MediatR, minimal APIs act as entry point for handling HTTP Requests. Instead of implementing the business logic directly, these actions delegate the responsibility to MediatR. 
+- ![alt text](image-56.png)
+- Controller receives requests, creates a command or query object and sends it to MediatR, MediatR then dispatches this object to appropriate handler. 
+- ![alt text](image-57.png)
+- Often handling a request requires additional steps like logging, validation, auditing and applying security checks. These are called cross cutting concerns. 
+- MediatR provides mediator pipeline where these cross cutting concerns can be inserted transparently.
+- Pipeline coordinates the request handling, ensuring that all necessary steps are executed in the right order. 
+- In MediatR pipeline behaviors are used to handle cross cutting concerns.
+- Wrap around request handling allowing us to execute logic before and after the actual handler is called. 
+- We can have the following:
+  1. Log Behavior: A behavior that logs details about handling of a request.
+  2. ValidatorBehavior: A behavior that validates incoming requests before they reach the handler.
+- This provides a structured and clean way to handle complex request processing.
+- ![alt text](image-58.png) 
+
+```c#
+public record CreateProductCommand
+    (string name, List<string> category, string description, string imageFile, decimal price)
+    :IRequest<CreateProductResult>;
+
+public record CreateProductResult(Guid Id);
+internal class CreateProductCommandHandler : IRequestHandler<CreateProductCommand, CreateProductResult>
+{
+    public Task<CreateProductResult> Handle(CreateProductCommand command, CancellationToken cancellationToken)
+    {
+        //Business logic to create a product
+        throw new NotImplementedException();
+    }
+}
+
+
+```
+- However IRequest and IRequestHandler interfaces of MediatR donot distinguish between command and query 
+- Therefore, we need to create abstraction on MediatR for CQRS.
+- ![alt text](image-59.png)
+```c#
+//Here Unit represents a void type since void is not a valid return type
+public interface ICommand : ICommand<Unit>
+{
+
+}
+public interface ICommand<out TResponse>: IRequest<TResponse>
+{
+
+}
+
+public interface IQuery<out T> : IRequest<T>
+{
+
+}
+
+public interface ICommandHandler<in TCommand>: ICommandHandler<TCommand,Unit>
+    where TCommand: ICommand<Unit>
+{ 
+
+}
+public interface ICommandHandler<in TCommand, TResponse>
+    : IRequestHandler<TCommand, TResponse>
+    where TCommand : ICommand<TResponse>
+    where TResponse: notnull 
+{
+}
+
+ public interface IQueryHandler<in TQuery, TResponse>
+ : IRequestHandler<TQuery, TResponse>
+ where TQuery : IQuery<TResponse>
+ where TResponse: notnull
+ 
+ {
+
+ }
+
+```
+
+- **Create Product Handler code**
+```c#
+public record CreateProductCommand
+    (ProductDto Product)
+    :ICommand<CreateProductResult>;
+
+public record CreateProductResult(Guid Id);
+internal class CreateProductHandler(CatalogDbContext dbContext) : ICommandHandler<CreateProductCommand, CreateProductResult>
+{
+    public async Task<CreateProductResult> Handle(CreateProductCommand command, CancellationToken cancellationToken)
+    {
+
+        //create Product Entity from command object
+        var product = CreateNewProduct(command.Product);
+        //save to database
+        dbContext.Products.Add(product);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        //return a result
+        return new CreateProductResult(product.Id);
+    }
+
+    private Product CreateNewProduct(ProductDto productDto)
+    {
+        var product = Product.Create(
+            Guid.NewGuid(),
+            productDto.Name,
+            productDto.Category,
+            productDto.Description,
+            productDto.ImageFile,
+            productDto.Price);
+
+        return product;
+    }
+}
+
+```
+- Update Product Handler code
+```c#
+ public record UpdateProductCommand
+     (ProductDto Product)
+     : ICommand<UpdateProductResult>;
+
+ public record UpdateProductResult(bool IsSuccess);
+ internal class UpdateProductHandler(CatalogDbContext dbContext) : ICommandHandler<UpdateProductCommand,UpdateProductResult>
+ {
+
+     public async Task<UpdateProductResult> Handle(UpdateProductCommand command, CancellationToken cancellationToken)
+     {
+         //Update product entity from command object
+         var product = await dbContext.Products.FindAsync([command.Product.Id], cancellationToken);
+         if (product is null)
+         {
+             throw new Exception($"Product not found: {command.Product.Id}");    
+         }
+
+         UpdateProductWithNewValues(product,command.Product);
+
+         //save to database
+         dbContext.Products.Update(product);
+         await dbContext.SaveChangesAsync(cancellationToken);
+
+         //return a result
+         return new UpdateProductResult(true);
+     }
+
+     private void UpdateProductWithNewValues(Product product, ProductDto productDto)
+     {
+         product.Update(
+             productDto.Name,
+             productDto.Category,
+             productDto.Description,
+             productDto.ImageFile,
+             productDto.Price
+             );
+     }
+
+```
+- **Why we use FindAsync() instead of FirstOrDefault()**
+- It gives better performance as it finds an entity with the primary key(PK)
+- Optimized to lookup a single entity.
+- FindAsync() is used when we want to find and then modify the given entity. We cannot use AsNoTracking() with FindAsync.  Use SingleOrDefault() or FirstOrDefault if we just want to retrieve the item
+
+- Delete the Product handler
+```c#
+public record DeleteProductCommand(Guid productId) : ICommand<DeleteProductResult>;
+public record DeleteProductResult(bool isSuccess);
+internal class DeleteProductHandler(CatalogDbContext dbContext) : ICommandHandler<DeleteProductCommand, DeleteProductResult>
+{
+    public async Task<DeleteProductResult> Handle(DeleteProductCommand command, CancellationToken cancellationToken)
+    {
+        //fetch product entity from command object
+        var product = await dbContext.Products.FindAsync([command.productId], cancellationToken);
+        if (product is null)
+        {
+            throw new Exception($"Product not found: {command.productId}");
+        }
+
+        //delete the product
+        dbContext.Products.Remove(product);
+        //save changes to db
+        await dbContext.SaveChangesAsync(cancellationToken);
+        //return the result
+        return new DeleteProductResult(true);
+    }
+}
+
+```
+
+## Mapping Entities using Mapster Library (similar to Automapper)
+- Mapper Library 
+- Open Source
+
+## Get Products Query Handler using Mapster 
+```c#
+public record GetProductsQuery():IQuery<GetProductsResult>;
+public record GetProductsResult(IEnumerable<ProductDto> products);
+internal class GetProductsHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductsQuery, GetProductsResult>
+{
+    public async Task<GetProductsResult> Handle(GetProductsQuery query, CancellationToken cancellationToken)
+    {
+        //get products using dbContext
+        var products = await dbContext.Products
+                        .AsNoTracking()
+                        .OrderBy(x=>x.Name)
+                        .ToListAsync(cancellationToken);
+
+        //mapping product entity to productDto using Mapster
+        var productDtos = products.Adapt<List<ProductDto>>();
+        
+        //return result
+        return new GetProductsResult(productDtos);
+    }
+}
+
+```
+- Get Products By Category Query 
+  
+```c#
+ public record GetProductByCategoryQuery(string category): IQuery<GetProductByCategoryResult>;
+
+ public record GetProductByCategoryResult(IEnumerable<ProductDto> products);
+ internal class GetProductsByCategoryHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductByCategoryQuery, GetProductByCategoryResult>
+ {
+     public async Task<GetProductByCategoryResult> Handle(GetProductByCategoryQuery query, CancellationToken cancellationToken)
+     {
+         var products = await dbContext.Products
+                        .AsNoTracking()
+                        .Where(x=>x.Category.Contains(query.category))  
+                        .OrderBy(x=>x.Name)
+                        .ToListAsync(cancellationToken);
+         var productDtos = products.Adapt<List<ProductDto>>();
+         return new GetProductByCategoryResult(productDtos);
+     }
+ }
+
+```
+## Developing Domain Events 
+- We know domain events are dispatched using the SaveChangesInterceptor when a Product is created or modified.
+- This interceptor publish these events. 
+- Domain Event handler can be written as follows:
+- Please notice it implements INotificationHandler and each event implements INotification interface provided by MediatR
+- This way when we publish the events using the interceptor, these INotification events are sent to their respective handler.
+- 
+```c#
+public class ProductCreatedEventHandler(ILogger<ProductCreatedEventHandler> logger) : INotificationHandler<ProductCreatedEvent>
+{
+    public Task Handle(ProductCreatedEvent notification, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Domain Event handled: {DomainEvent}",notification.GetType().Name);
+        return Task.CompletedTask;
+    }
+}
+
+public class ProductPriceChangedEventHandler(ILogger<ProductPriceChangedEventHandler> logger) : INotificationHandler<ProductPriceChangedEvent>
+{
+    public Task Handle(ProductPriceChangedEvent notification, CancellationToken cancellationToken)
+    {
+        //TODO: Publish Product Price Changed Integration Event for Update Basket Prices
+        logger.LogInformation("Domain Event handled: {DomainEvent}", notification.GetType().Name);
+        return Task.CompletedTask;
+    }
+}
+
+```
+
+## Develop Catalog API Endpoints exposing minimal Apis with Carter and REPR pattern 
+- REPR Pattern is a design pattern for developing API Endpoints implementing a simple Request Endpoint Response flow 
+- REPR: Request, Endpoint, Response - it simplifies development of Rest Api endpoints
+- ![alt text](image-60.png)
+- REPR Design pattern defines web api endpoints as having these components:
+- Request - Data structure the endpoint expects 
+- Endpoint: Logic the endpoint performs given a request 
+- Response: Data structure the endpoint returns.
+- Enables development of Rest API endpoints and enforces the SRP principle. 
+- ![alt text](image-61.png)
+
+## Carter Library
+- Extends capability of Asp.net core minimal apis 
+- helps to organize our endpoints and simplifies creation of Http request handlers.
+- Carter is a framework that is a thin layer of extension methods and functionality over asp.net core. 
+- Minimal Apis were introduced in ASP.NET Core 6 and further improved in ASP.NET Core 8 
+- ![alt text](image-62.png)
+- ![alt text](image-63.png)
+- For developing a minimal Api endpoint using Carter Library use this code:
+- Note that we can add more details to our endpoint with simple extension methods provided by Carter
+- Also note that endpoint we create will implement the ICarterModule and we can add routes to it.
+```c#
+public record CreateProductRequest(ProductDto Product);
+public record CreateProductResponse(Guid Id);
+public class CreateProductEndpoint : ICarterModule
+{
+    public void AddRoutes(IEndpointRouteBuilder app)
+    {
+        app.MapPost("/products", async (CreateProductRequest request, ISender sender) =>
+        {
+            var command = request.Adapt<CreateProductCommand>();
+            var result = await sender.Send(command);
+            var response = result.Adapt<CreateProductResponse>();
+            return Results.Created($"/products/{response.Id}", response);
+        })
+        .WithName("CreateProduct")
+        .Produces<CreateProductResponse>(StatusCodes.Status201Created)
+        .ProducesProblem(StatusCodes.Status400BadRequest)
+        .WithSummary("Create Product")
+        .WithDescription("Create Product");
+    }
+}
+
+
+```
