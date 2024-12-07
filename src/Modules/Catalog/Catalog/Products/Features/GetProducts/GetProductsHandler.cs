@@ -3,7 +3,7 @@
 namespace Catalog.Products.Features.GetProducts
 {
     public record GetProductsQuery():IQuery<GetProductsResult>;
-    public record GetProductsResult(IEnumerable<ProductDto> products);
+    public record GetProductsResult(IEnumerable<ProductDto> Products);
     internal class GetProductsHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductsQuery, GetProductsResult>
     {
         public async Task<GetProductsResult> Handle(GetProductsQuery query, CancellationToken cancellationToken)

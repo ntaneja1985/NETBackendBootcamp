@@ -5,7 +5,7 @@ namespace Catalog.Products.Features.GetProductByCategory
 {
     public record GetProductByCategoryQuery(string category): IQuery<GetProductByCategoryResult>;
 
-    public record GetProductByCategoryResult(IEnumerable<ProductDto> products);
+    public record GetProductByCategoryResult(IEnumerable<ProductDto> Products);
     internal class GetProductsByCategoryHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductByCategoryQuery, GetProductByCategoryResult>
     {
         public async Task<GetProductByCategoryResult> Handle(GetProductByCategoryQuery query, CancellationToken cancellationToken)

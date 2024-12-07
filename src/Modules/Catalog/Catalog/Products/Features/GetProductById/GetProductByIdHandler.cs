@@ -3,7 +3,7 @@ namespace Catalog.Products.Features.GetProductById
 {
     public record GetProductByIdQuery(Guid id) : IQuery<GetProductByIdResult>;
 
-    public record GetProductByIdResult(ProductDto productDto);
+    public record GetProductByIdResult(ProductDto Product);
     internal class GetProductByIdHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductByIdQuery, GetProductByIdResult>
     {
         public async Task<GetProductByIdResult> Handle(GetProductByIdQuery query, CancellationToken cancellationToken)

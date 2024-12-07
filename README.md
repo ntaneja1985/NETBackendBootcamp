@@ -1410,3 +1410,79 @@ public class CreateProductEndpoint : ICarterModule
 
 
 ```
+- Similar to this we can create UpdateProductEndpoint, DeleteProductEndpoint
+- For GetProductsQueryEndpoint we can use this code:
+```c#
+  //public record GetProductsRequest()
+ public record GetProductsResponse(IEnumerable<ProductDto> Products);
+ public class GetProductsEndpoint : ICarterModule
+ {
+     public void AddRoutes(IEndpointRouteBuilder app)
+     {
+         app.MapGet("/products", async (ISender sender) =>
+         {
+             var result = await sender.Send(new GetProductsQuery());
+             var response = result.Adapt<GetProductsResponse>();
+             return Results.Ok(response);
+         })
+         .WithName("GetProducts")
+         .Produces<GetProductsResponse>(StatusCodes.Status200OK)
+         .ProducesProblem(StatusCodes.Status400BadRequest)
+         .ProducesProblem(StatusCodes.Status404NotFound)
+         .WithSummary("Get Products")
+         .WithDescription("Get Products"); 
+     }
+ }
+
+```
+- Now we need to register our implementations of ICarter module in Program.cs file of Api Project.
+- We also need to configure the request pipeline to MapCarter endpoints so as to expose the HTTP methods 
+```c#
+
+builder.Services.AddCarter(configurator: config =>
+{
+    //Get all implementations of ICarterModule and register them to expose the HTTP methods.
+    var catalogModules = typeof(CatalogModule).Assembly.GetTypes()
+                         .Where(t=>t.IsAssignableTo(typeof(ICarterModule))).ToArray();
+    config.WithModules(catalogModules);
+});
+
+
+//Expose HTTP Request endpoints
+app.MapCarter();
+
+```
+- **what is params keyword in c#**
+- The params keyword in C# is used to specify a parameter that takes a variable number of arguments. 
+- It allows you to pass a variable number of arguments to a method without explicitly creating an array. 
+- This is particularly useful when you don't know in advance how many arguments you need to pass.
+- We can also create an extension method to simplify carter registration across various modules in our application.
+```c#
+public static class CarterExtensions
+{
+    public static IServiceCollection AddCarterWithAssemblies(this IServiceCollection services, params Assembly[] assemblies)
+    {
+        services.AddCarter(configurator: config =>
+        {
+            //Get all implementations of ICarterModule and register them to expose the HTTP methods.
+            foreach (var assembly in assemblies)
+            {
+                var modules = assembly.GetTypes()
+                .Where(t => t.IsAssignableTo(typeof(ICarterModule))).ToArray();
+                
+                config.WithModules(modules);
+            }
+        });
+        return services;
+    }
+}
+
+```
+- Now instead of registering each module in Program.cs file, we can utilize the above extension method like this:
+```c#
+//Register Carter Module Endpoints for Catalog Module
+builder.Services
+    .AddCarterWithAssemblies(typeof(CatalogModule).Assembly);
+
+
+```

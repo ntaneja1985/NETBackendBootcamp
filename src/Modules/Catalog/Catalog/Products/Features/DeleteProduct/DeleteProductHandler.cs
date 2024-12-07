@@ -3,7 +3,7 @@
 namespace Catalog.Products.Features.DeleteProduct
 {
     public record DeleteProductCommand(Guid productId) : ICommand<DeleteProductResult>;
-    public record DeleteProductResult(bool isSuccess);
+    public record DeleteProductResult(bool IsSuccess);
     internal class DeleteProductHandler(CatalogDbContext dbContext) : ICommandHandler<DeleteProductCommand, DeleteProductResult>
     {
         public async Task<DeleteProductResult> Handle(DeleteProductCommand command, CancellationToken cancellationToken)
