@@ -1486,3 +1486,294 @@ builder.Services
 
 
 ```
+
+## Develop Cross Cutting Concerns
+- **MediatR pipeline behaviors**
+- Apply Validation with AbstractValidator using **Fluent Validation** 
+- Validation of Pipeline Behavior with MediatR using Fluent Validation Library 
+- **Global Handling Exceptions** in ASP.NET Core with app.UseExceptionHandler 
+- Logging Behavior in MediatR pipeline for cross-cutting concerns.
+- Develop GetProductsQuery with Pagination using CQRS and MediatR 
+- **Structured Logging using Serilog** in .NET 8 Minimal API 
+- Serilog WriteToSeq for Structured Logging in .NET 
+- Develop cross cutting concerns in Shared Library.
+
+## MediatR Pipeline Behavior and Fluent Validation Library
+- MediatR pipeline behaviors allows us to add additional logic into the request handling process: validation, logging, exception handling and performance tracking. 
+- Pipeline behaviours act as middleware in the MediatR library, they wrap around request handling process, enabling us to handle cross cutting concerns. 
+- Pipeline behavior is a class that implements IPipelineBehavior<TRequest,TResponse>.
+- It has a Handle() method where we can execute code before and after the next delegate is invoked. 
+- ![alt text](image-64.png)
+- ![alt text](image-65.png)
+- Fluent Validation is a .NET library for building strongly typed validation rules. 
+- We can integrate Fluent Validation with MediatR to validate requests before they reach the actual handler within a pipeline behavior. 
+- Allows us to define validation rules in separate classes to specify conditions that each property of model must satisfy.
+- ![alt text](image-66.png)
+- Combining Fluent Validation with MediatR centralizes our cross cutting concerns like validation making our code cleaner and more maintainable.
+- Go to Create Product Handler and add this validation:
+```c#
+public class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
+{
+    public CreateProductCommandValidator()
+    {
+        RuleFor(x => x.Product.Name).NotEmpty().WithMessage("Name is required");
+        RuleFor(x => x.Product.Category).NotEmpty().WithMessage("Category is required");
+        RuleFor(x => x.Product.ImageFile).NotEmpty().WithMessage("Image File is required");
+        RuleFor(x => x.Product.Price).GreaterThan(0).WithMessage("Price must be greater than 0");
+    }
+}
+
+internal class CreateProductHandler(CatalogDbContext dbContext, IValidator<CreateProductCommand> validator
+    ,ILogger<CreateProductHandler> logger) : ICommandHandler<CreateProductCommand, CreateProductResult>
+{
+    public async Task<CreateProductResult> Handle(CreateProductCommand command, CancellationToken cancellationToken)
+    {
+
+        //Validate the Create Product Command
+        var result = await validator.ValidateAsync(command, cancellationToken);
+        var errors = result.Errors.Select(e => e.ErrorMessage).ToList();
+        if (errors.Any())
+        {
+            throw new ValidationException(errors.FirstOrDefault());
+        }
+
+        //Logging 
+        logger.LogInformation("Create Product Command Handler handle method called with {@Command}", command);
+
+
+        //create Product Entity from command object
+        var product = CreateNewProduct(command.Product);
+        //save to database
+        dbContext.Products.Add(product);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        //return a result
+        return new CreateProductResult(product.Id);
+    }
+}
+
+```
+- We need to register validators in CatalogModule like this
+```c#
+ services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
+
+```
+- However we should not combine validation and business logic in the Handle() method of the Handler like above.
+
+## Validation Pipeline Behavior with MediatR using Fluent Validation Library
+- The job of a command handler is to process our business logic.
+- For doing validations on each of command, we need to use Fluent Validation to validate our command model
+- We also need to use MediatR pipeline behaviors to trigger validations before the command reaches the command handler
+- If there are any errors in the incoming command request, we need to throw exceptions 
+- For this purpose, first remove all validation logic from CreateProductCommandHandler 
+- Now in shared folder create a ValidationBehavior class that implements IPipelineBehavior of MediatR like this 
+```c#
+  public class ValidationBehavior<TRequest, TResponse>
+     (IEnumerable<IValidator<TRequest>> validators): 
+     IPipelineBehavior<TRequest, TResponse>
+     where TRequest: ICommand<TResponse>
+ {
+     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+     {
+         var context = new ValidationContext<TRequest>(request);
+         //Run all the validators on the command and aggregate the results.
+         var validationResults = await Task.WhenAll(validators.Select(v => v.ValidateAsync(context, cancellationToken)));
+         var failures = validationResults
+                        .Where(r=>r.Errors.Any())
+                        .SelectMany(r => r.Errors)
+                        .ToList();
+         if (failures.Any())
+         {
+             throw new ValidationException(failures);
+         }
+
+         return await next();
+     }
+ }
+
+```
+- Now we need to register these validation behaviors inside the mediatR like this in CatalogModule.
+```c#
+  services.AddMediatR(config =>
+ {
+     config.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly());
+     config.AddOpenBehavior(typeof(ValidationBehavior<,>));
+ });
+
+```
+
+## Develop CRUD Command validators using Fluent Validation
+- Update Product Validator 
+```c#
+public class UpdateProductCommandValidator : AbstractValidator<UpdateProductCommand>
+{
+    public UpdateProductCommandValidator()
+    {
+        RuleFor(x => x.Product.Id).NotEmpty().WithMessage("Id is required");
+        RuleFor(x => x.Product.Name).NotEmpty().WithMessage("Name is required");
+        RuleFor(x => x.Product.Price).GreaterThan(0).WithMessage("Price must be greater than 0");
+    }
+}
+
+```
+- Delete Product Validator
+```c#
+ public class DeleteProductCommandValidator : AbstractValidator<DeleteProductCommand>
+ {
+     public DeleteProductCommandValidator()
+     {
+         RuleFor(x => x.productId).NotEmpty().WithMessage("Product Id is required");
+     }
+ }
+
+```
+## Global Exception Handling with app.UseExceptionHandler 
+- Use the Exception Handler in Program.cs file of Api Project as follows :
+- We use the UseExceptionHandler() extension method.
+```c#
+//Handle Exceptions 
+app.UseExceptionHandler(exceptionHandlerApp =>
+{
+    exceptionHandlerApp.Run(async context =>
+    {
+        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+        if(exception == null)
+        {
+            return;
+        }
+        var problemDetails = new ProblemDetails
+        {
+            Title = exception.Message,
+            Status = StatusCodes.Status500InternalServerError,
+            Detail = exception.StackTrace
+        };
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(exception, exception.Message);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/problem+json";
+        await context.Response.WriteAsJsonAsync(problemDetails);
+    });
+});
+
+
+```
+
+## Generic Exception Classes in Shared Libraries
+- We can create custom exceptions in shared library like this 
+```c#
+public class NotFoundException : Exception
+{
+    public NotFoundException(string message): base(message)
+    {
+        
+    }
+    public NotFoundException(string name, object key)
+        : base($"Entity \"{name}\"({key}) was not found.")
+    {
+        
+    }
+}
+
+```
+- Then in each of Features we can create a custom exception for that feature implementing the above generic exceptions like this 
+```c#
+public class ProductNotFoundException : NotFoundException
+{
+    public ProductNotFoundException(Guid id):base("Product",id)
+    {
+        
+    }
+
+}
+
+
+```
+- Now we can just throw this custom exception in our code and exception message will be formatted automatically 
+```c#
+ var product = await dbContext.Products.FindAsync([command.Product.Id], cancellationToken);
+ if (product is null)
+ {
+     //throw new Exception($"Product not found: {command.Product.Id}");
+     throw new ProductNotFoundException(command.Product.Id);
+ }
+
+```
+## Global Exception Handling with IExceptionHandler
+- IExceptionHandler is an interface that gives the developer a callback for handling known exceptions in a central location 
+- Lifetime of IExceptionHandler is singleton. 
+- We will create a custom exception handler in shared library like this 
+```c#
+ public class CustomExceptionHandler(ILogger<CustomExceptionHandler> logger) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken cancellationToken)
+    {
+        logger.LogError("Error Message: {exceptionMessage}, Time of occurrence {time}"
+            ,exception.Message,DateTime.UtcNow);
+
+        //c# pattern matching..see how we can create an object properties on the fly and also we are using object destructuring
+        //We are destructuring the details object into Detail, Title and StatusCode property
+        (string Detail, string Title, int StatusCode) details = exception switch
+        {
+            InternalServerException =>
+            (exception.Message,
+            exception.GetType().Name,
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError
+            ),
+            ValidationException =>
+            (exception.Message,
+            exception.GetType().Name,
+            context.Response.StatusCode = StatusCodes.Status400BadRequest
+            ),
+            BadRequestException =>
+            (exception.Message,
+            exception.GetType().Name,
+            context.Response.StatusCode = StatusCodes.Status400BadRequest
+            ),
+            NotFoundException =>
+            (exception.Message,
+            exception.GetType().Name,
+            context.Response.StatusCode = StatusCodes.Status404NotFound
+            ),
+            _ => 
+            (
+               exception.Message,
+               exception.GetType().Name,
+               context.Response.StatusCode = StatusCodes.Status500InternalServerError
+            )
+
+        };
+
+        var problemDetails = new ProblemDetails
+        {
+            Title = details.Title,
+            Detail = details.Detail,
+            Status = details.StatusCode,
+            Instance = context.Request.Path
+        };
+
+        problemDetails.Extensions.Add("traceId", context.TraceIdentifier);
+        if(exception is ValidationException validationException)
+        {
+            problemDetails.Extensions.Add("ValidationErrors", validationException.Errors);
+        }
+
+        await context.Response.WriteAsJsonAsync( problemDetails,cancellationToken );
+        return true;
+    }
+}
+
+```
+- Now we will go to Program.cs and remove the exception handling code we had added earlier and register our own custom exceptions
+```c#
+builder.Services.AddExceptionHandler<CustomExceptionHandler>();
+
+app.UseExceptionHandler(options =>
+{
+
+});
+
+
+```
+
+

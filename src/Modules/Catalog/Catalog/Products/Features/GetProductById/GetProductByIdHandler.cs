@@ -1,4 +1,6 @@
 ﻿
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory.Database;
+
 namespace Catalog.Products.Features.GetProductById
 {
     public record GetProductByIdQuery(Guid id) : IQuery<GetProductByIdResult>;
@@ -14,7 +16,8 @@ namespace Catalog.Products.Features.GetProductById
 
             if (product == null)
             {
-                throw new Exception($"Product not found: {query.id}");
+                // throw new Exception($"Product not found: {query.id}");
+                throw new ProductNotFoundException(query.id);
             }
 
             var productDto = product.Adapt<ProductDto>();

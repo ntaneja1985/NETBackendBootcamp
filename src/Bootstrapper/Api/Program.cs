@@ -23,6 +23,8 @@ builder.Services
     .AddOrderingModule(builder.Configuration);
 
 
+builder.Services.AddExceptionHandler<CustomExceptionHandler>();
+
 //build the webapplication
 var app = builder.Build();
 
@@ -36,6 +38,35 @@ app
     .UseBasketModule()
     .UseOrderingModule();
 
+app.UseExceptionHandler(options =>
+{
+
+});
+
+//Handle Exceptions 
+//app.UseExceptionHandler(exceptionHandlerApp =>
+//{
+//    exceptionHandlerApp.Run(async context =>
+//    {
+//        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+//        if(exception == null)
+//        {
+//            return;
+//        }
+//        var problemDetails = new ProblemDetails
+//        {
+//            Title = exception.Message,
+//            Status = StatusCodes.Status500InternalServerError,
+//            Detail = exception.StackTrace
+//        };
+//        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+//        logger.LogError(exception, exception.Message);
+
+//        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+//        context.Response.ContentType = "application/problem+json";
+//        await context.Response.WriteAsJsonAsync(problemDetails);
+//    });
+//});
 
 ////Use Static files
 //app.UseStaticFiles();
