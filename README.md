@@ -1870,3 +1870,117 @@ public class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior<TReque
 app.UseSerilogRequestLogging();
 
 ```
+## Serilog Write to Seq for Structured Logging in .NET 
+- Seq is a centralized logging platform that enables efficient log management, analysis and visualization. 
+- It allows us to store logs in a structured format, making it easier to filter and search for specific log entries. 
+- ![alt text](image-68.png)
+- Seq is useful for monitoring and debugging applications.
+- To configure Seq, we need to add Serilog.Sinks.Seq nuget package to our Api Project
+- Then we need to change our appsettings.json as follows: 
+```c#
+ "Serilog": {
+   //"Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+   "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.Seq" ],
+   "MinimumLevel": {
+     "Default": "Information",
+     "Override": {
+       "Microsoft": "Information",
+       "System": "Warning"
+     }
+   },
+   "WriteTo": [
+     {
+       "Name": "Console"
+     },
+     {
+       //"Name": "File",
+       "Name": "Seq",
+       "Args": {
+         "serverUrl": "http://localhost:5341"
+         //"path": "/Logs/log-development-.txt",
+         //"rollingInterval": "Day"
+       }
+     }
+   ],
+   "Enrich": [ "FromLogContext", "WithMachineName", "WithProcessId", "WithThreadId" ],
+   "Properties": {
+     "Application": "EShop ASP.NET Core App",
+     "Environment": "Development"
+   }
+ },
+
+```
+- Now serilog will start writing logs to Seq instead of Console or File. 
+- Seq is similar to ELK Stack. We can search and build queries on our logs. 
+- ![alt text](image-70.png)
+
+## Pagination with EFCore
+- EFCore supports pagination through Skip() and Take() Linq methods 
+- Divide data into pages and retrieve data for specific page at a time.
+- We will create 2 helper classes in our shared project 
+```c#
+{
+    public record PaginationRequest(int PageIndex = 0, int PageSize = 10);
+}
+
+public class PaginatedResult<TEntity>(int pageIndex, int pageSize, long count, IEnumerable<TEntity> data) where TEntity : class
+{
+    public int PageIndex { get; } = pageIndex;
+    public int PageSize { get; } = pageSize;
+    public long Count { get; } = count; 
+    public IEnumerable<TEntity> Data { get; } = data;
+}
+
+```
+- WE Will modify the Get Products Endpoint as follows:
+```c#
+  public record GetProductsResponse(PaginatedResult<ProductDto> Products);
+ public class GetProductsEndpoint : ICarterModule
+ {
+     public void AddRoutes(IEndpointRouteBuilder app)
+     {
+         app.MapGet("/products", async ([AsParameters] PaginationRequest request, ISender sender) =>
+         {
+             var result = await sender.Send(new GetProductsQuery(request));
+             var response = result.Adapt<GetProductsResponse>();
+             return Results.Ok(response);
+         })
+         .WithName("GetProducts")
+         .Produces<GetProductsResponse>(StatusCodes.Status200OK)
+         .ProducesProblem(StatusCodes.Status400BadRequest)
+         .ProducesProblem(StatusCodes.Status404NotFound)
+         .WithSummary("Get Products")
+         .WithDescription("Get Products"); 
+     }
+ }
+
+```
+- We will modify the GetProductsHandler as follows:
+```c#
+ public record GetProductsQuery(PaginationRequest PaginationRequest):IQuery<GetProductsResult>;
+public record GetProductsResult(PaginatedResult<ProductDto> Products);
+internal class GetProductsHandler(CatalogDbContext dbContext) : IQueryHandler<GetProductsQuery, GetProductsResult>
+{
+    public async Task<GetProductsResult> Handle(GetProductsQuery query, CancellationToken cancellationToken)
+    {
+        var pageIndex = query.PaginationRequest.PageIndex;
+        var pageSize = query.PaginationRequest.PageSize;
+        var totalCount = await dbContext.Products.LongCountAsync(cancellationToken);
+        //get products using dbContext
+        var products = await dbContext.Products
+                        .AsNoTracking()
+                        .Skip((pageIndex - 1)*pageSize)
+                        .Take(pageSize)
+                        .OrderBy(x=>x.Name)
+                        .ToListAsync(cancellationToken);
+
+        //mapping product entity to productDto using Mapster
+        var productDtos = products.Adapt<IEnumerable<ProductDto>>();
+        
+        //return result
+        return new GetProductsResult(new PaginatedResult<ProductDto>(pageIndex,pageSize,totalCount,productDtos));
+    }
+}
+
+
+```
