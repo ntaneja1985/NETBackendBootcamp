@@ -2112,3 +2112,348 @@ public class ShoppingCart : Aggregate<Guid>
 }
 
 ```
+
+## Develop Basket Data Infrastructure with EFCore and PostgreSQL
+- Basket Db Context will be developed as follows: 
+```c#
+ public class BasketDbContext : DbContext
+ {
+     public BasketDbContext(DbContextOptions<BasketDbContext> options ) : base(options)
+     {
+         
+     }
+
+     public DbSet<ShoppingCart> ShoppingCarts => Set<ShoppingCart>();
+     public DbSet<ShoppingCartItem> ShoppingCartItems => Set<ShoppingCartItem>();
+
+     protected override void OnModelCreating(ModelBuilder builder)
+     {
+         builder.HasDefaultSchema("basket");
+         builder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+         base.OnModelCreating(builder);
+     }
+ }
+
+```
+- Configurations for Shopping Cart and Shopping Cart Item are defined as follows:
+```c#
+public class ShoppingCartConfiguration : IEntityTypeConfiguration<ShoppingCart>
+{
+    public void Configure(EntityTypeBuilder<ShoppingCart> builder)
+    {
+        builder.HasKey(e => e.Id);
+
+        builder.HasIndex(e => e.UserName)
+               .IsUnique();
+
+        builder.Property(e => e.UserName)
+               .IsRequired()
+               .HasMaxLength(100);
+
+        //Shopping Cart has One to Many relationship with Shopping Cart Items
+        builder.HasMany(s => s.Items)
+           .WithOne()
+           .HasForeignKey(si => si.ShoppingCartId);
+    }
+}
+
+
+
+public class ShoppingCartItemConfiguration : IEntityTypeConfiguration<ShoppingCartItem>
+{
+    public void Configure(EntityTypeBuilder<ShoppingCartItem> builder)
+    {
+        builder.HasKey(e => e.Id);
+
+        builder.Property(oi => oi.ProductId).IsRequired();
+
+        builder.Property(oi => oi.Quantity).IsRequired();
+
+        builder.Property(oi => oi.Color);
+
+        builder.Property(oi => oi.Price).IsRequired();
+
+        builder.Property(oi => oi.ProductName).IsRequired();
+    }
+}
+
+```
+- Relationships with other entities are one to one, one to many and many to many 
+- EFCore handles these relationships with HAS/With pattern
+- Relationships can be configured using HasMany/WithOne methods for one to many and HasOne/WithMany for many to one relationships.
+- ![alt text](image-74.png)
+- Shopping Cart has one to many relationship with shopping cart items. 
+```c#
+ //Shopping Cart has One to Many relationship with Shopping Cart Items
+        builder.HasMany(s => s.Items)
+           .WithOne()
+           .HasForeignKey(si => si.ShoppingCartId);
+
+```
+- Value object mapping with complex type and complex property 
+- In EF Core 8, Complex Types are introduced to support value objects in DDD 
+- Complex type is an object that doesnot have a primary key and is used to represent a set of properties in an entity. 
+- ![alt text](image-75.png)
+- ![alt text](image-76.png)
+- Here Address can be a complex type representing the shipping and billing addresses for an order. And we can configure the relationship as above. 
+- For Auto Db migrations use this code in Basket Module :
+```c#
+
+builder.UseMigration<CatalogDbContext>();
+```
+
+- This UseMigration is an extension method that performs any pending migrations and seeds data if required 
+```c#
+public static class Extensions
+{
+    public static IApplicationBuilder UseMigration<TContext>(this IApplicationBuilder app) 
+        where TContext:DbContext
+    {
+        MigrateDatabaseAsync<TContext>(app.ApplicationServices).GetAwaiter().GetResult();
+        SeedDataAsync(app.ApplicationServices).GetAwaiter().GetResult();
+        return app;
+    }
+
+    private static async Task SeedDataAsync(IServiceProvider serviceProvider)
+    {
+        using var scope = serviceProvider.CreateScope();
+        var seeders = scope.ServiceProvider.GetServices<IDataSeeder>();
+        foreach (var seeder in seeders)
+        {
+            await seeder.SeedAllAsync();    
+        }
+    }
+
+    private static async Task MigrateDatabaseAsync<TContext>(IServiceProvider applicationServices) where TContext : DbContext
+    {
+        using var scope = applicationServices.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<TContext>();
+        //no need to call update-database command while running migrations
+        await context.Database.MigrateAsync();
+    }
+}
+
+```
+
+## Basket Module Use Case Development using CQRS and MediatR 
+- Develop Command and Query class with CQRS and MediatR. 
+- Develop Basket CreateBasketCommand and Handler 
+- Develop Delete Basket Command Handler
+- Develop Basket Queries
+- Develop AddItemToBasketHandler and RemoveItemFromBasketHandler
+- Create Basket Handler can be developed like this
+```c#
+namespace Basket.Basket.Features.CreateBasket
+{
+    public record CreateBasketCommand(ShoppingCartDto ShoppingCart)
+    : ICommand<CreateBasketResult>;
+    public record CreateBasketResult(Guid Id);
+    public class CreateBasketCommandValidator : AbstractValidator<CreateBasketCommand>
+    {
+        public CreateBasketCommandValidator()
+        {
+            RuleFor(x => x.ShoppingCart.UserName).NotEmpty().WithMessage("UserName is required");
+        }
+    }
+    internal class CreateBasketHandler(BasketDbContext dbContext)
+    : ICommandHandler<CreateBasketCommand, CreateBasketResult>
+    {
+        public async Task<CreateBasketResult> Handle(CreateBasketCommand command, CancellationToken cancellationToken)
+        {
+            //create Basket entity from command object
+            //save to database
+            //return result
+
+            var shoppingCart = CreateNewBasket(command.ShoppingCart);
+
+            dbContext.ShoppingCarts.Add(shoppingCart);
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            return new CreateBasketResult(shoppingCart.Id);
+        }
+
+        private ShoppingCart CreateNewBasket(ShoppingCartDto shoppingCartDto)
+        {
+            // create new basket
+            var newBasket = ShoppingCart.Create(
+                Guid.NewGuid(),
+                shoppingCartDto.UserName);
+
+            shoppingCartDto.Items.ForEach(item =>
+            {
+                newBasket.AddItem(
+                    item.ProductId,
+                    item.Quantity,
+                    item.Color,
+                    item.Price,
+                    item.ProductName);
+            });
+
+            return newBasket;
+        }
+    }
+}
+
+
+```
+
+- Get Basket Handler can be developed like this 
+```c#
+namespace Basket.Basket.Features.GetBasket
+{
+    public record GetBasketQuery(string UserName)
+    : IQuery<GetBasketResult>;
+    public record GetBasketResult(ShoppingCartDto ShoppingCart);
+    internal class GetBasketHandler(BasketDbContext dbContext)
+    : IQueryHandler<GetBasketQuery, GetBasketResult>
+    {
+        public async Task<GetBasketResult> Handle(GetBasketQuery query, CancellationToken cancellationToken)
+        {
+            // get basket with userName
+            var basket = await dbContext.ShoppingCarts
+            .AsNoTracking()
+            .Include(x => x.Items)
+                .SingleOrDefaultAsync(x => x.UserName == query.UserName, cancellationToken);
+
+            if (basket is null)
+            {
+                throw new BasketNotFoundException(query.UserName);
+            }
+
+            //mapping basket entity to shoppingcartdto
+            var basketDto = basket.Adapt<ShoppingCartDto>();
+
+            return new GetBasketResult(basketDto);
+        }
+    }
+}
+
+
+```
+
+- Add Item to Basket can be developed like this 
+```c#
+namespace Basket.Basket.Features.AddItemIntoBasket
+{
+    public record AddItemIntoBasketCommand(string UserName, ShoppingCartItemDto ShoppingCartItem)
+    : ICommand<AddItemIntoBasketResult>;
+    public record AddItemIntoBasketResult(Guid Id);
+    public class AddItemIntoBasketCommandValidator : AbstractValidator<AddItemIntoBasketCommand>
+    {
+        public AddItemIntoBasketCommandValidator()
+        {
+            RuleFor(x => x.UserName).NotEmpty().WithMessage("UserName is required");
+            RuleFor(x => x.ShoppingCartItem.ProductId).NotEmpty().WithMessage("ProductId is required");
+            RuleFor(x => x.ShoppingCartItem.Quantity).GreaterThan(0).WithMessage("Quantity must be greater than 0");
+        }
+    }
+    internal class AddItemIntoBasketHandler(BasketDbContext dbContext)
+    : ICommandHandler<AddItemIntoBasketCommand, AddItemIntoBasketResult>
+    {
+        public async Task<AddItemIntoBasketResult> Handle(AddItemIntoBasketCommand command, CancellationToken cancellationToken)
+        {
+            // Add shopping cart item into shopping cart
+            var shoppingCart = await dbContext.ShoppingCarts
+                .Include(x => x.Items)
+                .SingleOrDefaultAsync(x => x.UserName == command.UserName, cancellationToken);
+
+            if (shoppingCart is null)
+            {
+                throw new BasketNotFoundException(command.UserName);
+            }
+
+            shoppingCart.AddItem(
+                command.ShoppingCartItem.ProductId,
+                command.ShoppingCartItem.Quantity,
+                command.ShoppingCartItem.Color,
+                command.ShoppingCartItem.Price,
+                command.ShoppingCartItem.ProductName);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            return new AddItemIntoBasketResult(shoppingCart.Id);
+        }
+    }
+}
+
+
+
+```
+
+- Delete Basket Handler can be developed like this 
+```c#
+
+namespace Basket.Basket.Features.DeleteBasket
+{
+    public record DeleteBasketCommand(string UserName)
+    : ICommand<DeleteBasketResult>;
+    public record DeleteBasketResult(bool IsSuccess);
+    internal class DeleteBasketHandler(BasketDbContext dbContext)
+    : ICommandHandler<DeleteBasketCommand, DeleteBasketResult>
+    {
+        public async Task<DeleteBasketResult> Handle(DeleteBasketCommand command, CancellationToken cancellationToken)
+        {
+            //Delete Basket entity from command object
+            //save to database
+            //return result
+            var basket = await dbContext.ShoppingCarts
+            .SingleOrDefaultAsync(x => x.UserName == command.UserName, cancellationToken);
+
+            if (basket is null)
+            {
+                throw new BasketNotFoundException(command.UserName);
+            }
+
+            dbContext.ShoppingCarts.Remove(basket);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return new DeleteBasketResult(true);
+
+
+        }
+    }
+}
+
+
+
+```
+- Remove Item from Basket Handler can be developed like this 
+```c#
+namespace Basket.Basket.Features.RemoveItemFromBasket
+{
+    public record RemoveItemFromBasketCommand(string UserName, Guid ProductId)
+    : ICommand<RemoveItemFromBasketResult>;
+    public record RemoveItemFromBasketResult(Guid Id);
+    public class RemoveItemFromBasketCommandValidator : AbstractValidator<RemoveItemFromBasketCommand>
+    {
+        public RemoveItemFromBasketCommandValidator()
+        {
+            RuleFor(x => x.UserName).NotEmpty().WithMessage("UserName is required");
+            RuleFor(x => x.ProductId).NotEmpty().WithMessage("ProductId is required");
+        }
+    }
+    internal class RemoveItemFromBasketHandler(BasketDbContext dbContext)
+    : ICommandHandler<RemoveItemFromBasketCommand, RemoveItemFromBasketResult>
+    {
+        public async Task<RemoveItemFromBasketResult> Handle(RemoveItemFromBasketCommand command, CancellationToken cancellationToken)
+        {
+            var shoppingCart = await dbContext.ShoppingCarts
+           .Include(x => x.Items)
+           .SingleOrDefaultAsync(x => x.UserName == command.UserName, cancellationToken);
+
+            if (shoppingCart is null)
+            {
+                throw new BasketNotFoundException(command.UserName);
+            }
+
+            shoppingCart.RemoveItem(command.ProductId);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            return new RemoveItemFromBasketResult(shoppingCart.Id);
+        }
+    }
+}
+
+
+
+```

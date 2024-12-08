@@ -2,7 +2,7 @@
 {
     public class CatalogDbContext: DbContext
     {
-        public CatalogDbContext(DbContextOptions options):base(options)
+        public CatalogDbContext(DbContextOptions<CatalogDbContext> options):base(options)
         {
             
         }
