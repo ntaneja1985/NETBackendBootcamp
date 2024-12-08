@@ -25,7 +25,8 @@ namespace Catalog.Products.Features.CreateProduct
         {
             
             //Logging 
-            logger.LogInformation("Create Product Command Handler handle method called with {@Command}", command);
+            //Use Logging Behavior
+            //logger.LogInformation("Create Product Command Handler handle method called with {@Command}", command);
 
 
             //create Product Entity from command object

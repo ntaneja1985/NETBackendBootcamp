@@ -1776,4 +1776,97 @@ app.UseExceptionHandler(options =>
 
 ```
 
+## Logging Behavior in MediatR Pipeline for Cross Cutting Concerns
+- Similar to Validation Behavior we can create Logging Behavior which implements the IPipelineBehavior 
+- We should not be doing any logging inside our command handlers.
+- It can be centralized like this 
+```c#
+public class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior<TRequest,TResponse>> logger)
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest: notnull, IRequest<TResponse>
+    where TResponse: notnull
+{
+    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("[START] Handle request = {Request} - Response = {Response} -RequestData = {RequestData}", 
+            typeof(TRequest).Name, typeof(TResponse).Name, request);
 
+        var timer = new Stopwatch();
+        timer.Start();
+
+        var response = await next();
+        timer.Stop();
+        var timeTaken = timer.Elapsed;
+        logger.LogInformation("[PERFORMANCE] The request {Request} took {TimeTaken} seconds", 
+            typeof(TRequest).Name, timeTaken.Seconds);
+        logger.LogInformation("[END] Handled request = {Request} with Response = {Response}",
+            typeof(TRequest).Name, typeof(TResponse).Name);
+        return response;
+
+    }
+}
+
+
+```
+- We can register it in CatalogModule like this 
+```c#
+  services.AddMediatR(config =>
+ {
+     config.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly());
+     config.AddOpenBehavior(typeof(ValidationBehavior<,>));
+     config.AddOpenBehavior(typeof(LoggingBehavior<,>));
+ });
+
+```
+- We can see logs like this: ![alt text](image-67.png)
+
+## Structured Logging using Serilog in .NET Minimal APIs 
+- Serilog is a diagnostic logging library for .NET 
+- We want to capture detailed and structured log information to query and analyze logs 
+- Serilog can help to create structured logs for debugging and monitoring applications. 
+- Need to update serilog settings in appsettings.json
+```c#
+"Serilog": {
+  "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+  "MinimumLevel": {
+    "Default": "Information",
+    "Override": {
+      "Microsoft": "Information",
+      "System": "Warning"
+    }
+  },
+  "WriteTo": [
+    {
+      "Name": "Console"
+    },
+    {
+      "Name": "File",
+      "Args": {
+        ////"serverUrl": "http://localhost:5341"
+        "path": "/Logs/log-development-.txt",
+        "rollingInterval": "Day"
+      }
+    }
+  ],
+  "Enrich": [ "FromLogContext", "WithMachineName", "WithProcessId", "WithThreadId" ],
+  "Properties": {
+    "Application": "EShop ASP.NET Core App",
+    "Environment": "Development"
+  }
+},
+
+```
+- We can register serilog in Program.cs file of Api project 
+```c#
+  builder.Host.UseSerilog((context, config) =>
+{
+    config.ReadFrom.Configuration(context.Configuration);
+});
+
+```
+- We can also enable logging of incoming HTTP Requests by using this extension method of Serilog in Program.cs file 
+```c#
+//Log every HTTP Request
+app.UseSerilogRequestLogging();
+
+```

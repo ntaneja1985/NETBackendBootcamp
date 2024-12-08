@@ -4,6 +4,11 @@
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Host.UseSerilog((context, config) =>
+{
+    config.ReadFrom.Configuration(context.Configuration);
+});
+
 //Add services to the container
 //builder.Services.AddControllers(); //Add MVC Controllers
 //builder.Services.AddCarter(configurator: config =>
@@ -33,15 +38,22 @@ var app = builder.Build();
 //Expose HTTP Request endpoints
 app.MapCarter();
 
+
+//Log every HTTP Request
+app.UseSerilogRequestLogging();
+
+//Use exception handler
+app.UseExceptionHandler(options =>
+{
+
+});
+
+
 app
     .UseCatalogModule()
     .UseBasketModule()
     .UseOrderingModule();
 
-app.UseExceptionHandler(options =>
-{
-
-});
 
 //Handle Exceptions 
 //app.UseExceptionHandler(exceptionHandlerApp =>
