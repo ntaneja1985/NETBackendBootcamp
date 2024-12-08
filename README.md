@@ -1984,3 +1984,131 @@ internal class GetProductsHandler(CatalogDbContext dbContext) : IQueryHandler<Ge
 
 
 ```
+
+## Develop Basket Module with Vertical Slice Architecture and CQRS. 
+- ![alt text](image-71.png)
+- VSA with feature folders 
+- CQRS with Mediator
+- EFCore for PostgresSql 
+- Minimal APIs for HTTP Apis 
+- Repository pattern implementation over EFCore and Redis Cache. 
+
+## Domain Model Analysis and Technical Analysis
+- Shopping Cart Class 
+- Shopping Cart Item: Individual item in shopping cart 
+- BasketCheckout Event --> Domain Event 
+- ProductPriceChanged Integration Event will also be handled 
+- GetShoppingCartWithItems
+- AddItemToShoppingCart
+- RemoveItemFromShoppingCart
+- DeleteShoppingCart 
+- When we add item to basket, sync and get price from Catalog Module 
+- We will have CheckoutBasket event and publish event to RabbitMq Message Broker .
+- We will handle Product Price Changed Integration Event in Basket, update existing basket with new product item prices.  
+- ![alt text](image-72.png)
+- Basket Module has 2 main data stores: PostgresSql and Redis 
+- We will have Basket Schema within PostgresSql database for data isolation.
+- Use EFCore Code First approach 
+-  We will have VSA. 
+-  Repository pattern is a DDD Pattern that is used to keep persistence concerns outside of the domain model. 
+-  It provides an abstraction of data, the app can work with simple abstraction interfaces.
+-  ![alt text](image-73.png)
+-  Project will be organized into Data, Feature, Folder-Basket and Models.
+-  Features like GetBasket and CreateBasket have their own handlers and endpoint definitions.
+-  Feature Folder will be Basket.
+-  Data Folder and Repository Folder manages database interactions.
+
+
+## Creating Domain Models for Shopping Cart and Shopping Cart Item 
+
+```c#
+public class ShoppingCart : Aggregate<Guid>
+{
+ //private set means it can only be set within the entity.
+    public string UserName { get; private set; } = default!;
+    private readonly List<ShoppingCartItem> _items = new();
+    public IReadOnlyList<ShoppingCartItem> Items => _items.AsReadOnly();
+    public decimal TotalPrice => Items.Sum(x => x.Price * x.Quantity);
+}
+
+
+public class ShoppingCartItem : Entity<Guid>
+{
+    public Guid ShoppingCartId { get; private set; } = default!;
+    public Guid ProductId { get; private set; } = default!;
+
+    //internal set ensures quantity can only be modified within this assembly or Basket Module
+    public int Quantity { get; internal set; } = default!;
+    public string Color { get; private set; } = default!;
+    
+    
+    //will come from Catalog Module with synchronous communication
+    public decimal Price { get;private set; } = default!;
+    public string ProductName { get; private set; } = default!;
+
+    internal  ShoppingCartItem(Guid shoppingCartId, Guid productId, int quantity, string color, decimal price, string productName)
+    {
+        ShoppingCartId = shoppingCartId;
+        ProductId = productId;
+        Quantity = quantity;
+        Color = color;
+        Price = price;
+        ProductName = productName;
+    }
+    
+
+}
+
+
+```
+
+- We will use Rich Domain Model Entity 
+- Here entities will encapsulate both data and behavior. 
+```c#
+public class ShoppingCart : Aggregate<Guid>
+{
+ //private set means it can only be set within the entity.
+    public string UserName { get; private set; } = default!;
+    private readonly List<ShoppingCartItem> _items = new();
+    public IReadOnlyList<ShoppingCartItem> Items => _items.AsReadOnly();
+    public decimal TotalPrice => Items.Sum(x => x.Price * x.Quantity);
+
+    public static ShoppingCart Create(Guid id, string userName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(userName);
+        var shoppingCart = new ShoppingCart
+        {
+            Id = id,
+            UserName = userName,
+        };
+        return shoppingCart;
+    }
+
+    public void AddItem(Guid productId, int quantity, string color, decimal price, string productName)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+
+        var existingItem = Items.FirstOrDefault(x => x.ProductId == productId);
+        if (existingItem != null)
+        {
+            existingItem.Quantity += quantity;
+        }
+        else
+        {
+            var newItem = new ShoppingCartItem(Id, productId, quantity, color, price, productName);
+            _items.Add(newItem);
+        }
+    }
+
+    public void RemoveItem(Guid productId)
+    {
+        var existingItem = Items.FirstOrDefault(x => x.ProductId == productId);
+        if (existingItem != null)
+        {
+            _items.Remove(existingItem);
+        }
+    }
+}
+
+```
