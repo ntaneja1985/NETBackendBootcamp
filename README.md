@@ -2457,3 +2457,43 @@ namespace Basket.Basket.Features.RemoveItemFromBasket
 
 
 ```
+
+## Add MediatR Extension Method 
+```c#
+public static class MediatRExtentions
+    {
+        public static IServiceCollection AddMediatRWithAssemblies
+            (this IServiceCollection services, params Assembly[] assemblies)
+        {
+            services.AddMediatR(config =>
+            {
+                config.RegisterServicesFromAssemblies(assemblies);
+                config.AddOpenBehavior(typeof(ValidationBehavior<,>));
+                config.AddOpenBehavior(typeof(LoggingBehavior<,>));
+            });
+
+            services.AddValidatorsFromAssemblies(assemblies);
+
+            return services;
+        }
+    }
+
+```
+- Make changes to Program.cs of Api Project as follows:
+```c#
+//common services: carter, mediatr, fluentvalidation
+var catalogAssembly = typeof(CatalogModule).Assembly;
+var basketAssembly = typeof(BasketModule).Assembly;
+
+builder.Services
+    .AddCarterWithAssemblies(catalogAssembly,basketAssembly);
+
+builder.Services
+    .AddMediatRWithAssemblies(catalogAssembly, basketAssembly);
+
+builder.Services
+    .AddCatalogModule(builder.Configuration)
+    .AddBasketModule(builder.Configuration)
+    .AddOrderingModule(builder.Configuration);
+
+```
