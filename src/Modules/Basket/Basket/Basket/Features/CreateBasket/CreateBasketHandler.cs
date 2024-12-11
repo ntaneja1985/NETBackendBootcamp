@@ -12,7 +12,7 @@ namespace Basket.Basket.Features.CreateBasket
             RuleFor(x => x.ShoppingCart.UserName).NotEmpty().WithMessage("UserName is required");
         }
     }
-    internal class CreateBasketHandler(BasketDbContext dbContext)
+    internal class CreateBasketHandler(IBasketRepository repository)
     : ICommandHandler<CreateBasketCommand, CreateBasketResult>
     {
         public async Task<CreateBasketResult> Handle(CreateBasketCommand command, CancellationToken cancellationToken)
@@ -23,8 +23,10 @@ namespace Basket.Basket.Features.CreateBasket
 
             var shoppingCart = CreateNewBasket(command.ShoppingCart);
 
-            dbContext.ShoppingCarts.Add(shoppingCart);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await repository.CreateBasket(shoppingCart);
+
+            //dbContext.ShoppingCarts.Add(shoppingCart);
+            //await dbContext.SaveChangesAsync(cancellationToken);
 
             return new CreateBasketResult(shoppingCart.Id);
         }

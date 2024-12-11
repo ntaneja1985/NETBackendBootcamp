@@ -2497,3 +2497,349 @@ builder.Services
     .AddOrderingModule(builder.Configuration);
 
 ```
+
+## Distributed Caching with Redis in Basket Module 
+- We will cache user shopping basket data
+- Implement Repository Pattern and Develop BasketRepository class 
+- Implement Proxy Pattern, Decorator Pattern and Scrutor Library 
+- Implement Cache Aside Pattern /Cache Invalidation with Redis 
+- Implement the Decorator Pattern developing Cached Basket Repository with Scrutor Library 
+- Setup Redis as distributed cache using Docker compose file 
+
+## Why use Redis 
+- Advanced key-value store
+- Used for caching, session storage, pub/sub systems 
+- Offers in-memory data storage resulting in fast data access 
+- Support various data structures 
+- Enables services to access shared data quickly and reduces load on databases 
+- ![alt text](image-77.png)
+
+## Cache-aside Pattern and Cache Invalidation
+- Most common caching strategy 
+- ![alt text](image-78.png)
+- First check the cache, if found return the data, if not fetch from DB, store it in cache and return data 
+- Some of the caching systems provide read-through and write-through/write-behind operations. In these systems, client application retrieves data over by cache. 
+- Responsibility of the applications to use the cache and update the cache if there is a cache miss. 
+- In microservices, it is good to use a distributed cache that is shared across multiple services 
+- Cache aside pattern can improve performance by reducing expensive database calls 
+- To implement the cache aside pattern we need to implement cache layer 
+- We need Redis or Memcache. 
+
+## Drawbacks of cache-aside pattern
+- Cache may introduce additional complexity 
+- Cache may need to be invalidated or refreshed when data is updated in the database or data store. 
+- This can require additional coordination between microservices .
+- Cache introduces additional latency if it is located remotely from the microservices.
+
+## Proxy Pattern
+- Proxy pattern provides a placeholder for another object to control access to it. 
+- This pattern creates a proxy object that serves as intermediary for requests to the original object. 
+- Common use case is lazy loading, controlling access, logging...It is like a gate-keeper for adding extra behaviors and checks before accessing the actual object. 
+
+
+## Decorator Pattern 
+- Dynamically adds behavior to an object without altering its structure. 
+- It involves a set of decorator classes that are used to extend the functionality of the original class without changing its code. 
+- It is useful for adding functionality to objects at runtime. 
+- For example: enhancing a window object with scrollbars, border dynamically. 
+
+## How to use Decorator Pattern 
+- Create abstract decorators that implement the same interface as the object they will extend. 
+- Then concrete decorator classes add additional behavior. 
+- For example, if we have a Basket Repository class for database operations, then we can create a CachedBasketRepository that extends BasketRepository with caching capabilities.
+- ![alt text](image-79.png)
+- ![alt text](image-80.png)
+
+## What is Scrutor Library 
+- .NET Library that extends the built-in IOC Container of .NET Core. 
+- It provides additional capabilities to scan and register services in a more flexible way. 
+- Useful for implementing patterns like Decorator in a clean and manageable way. 
+- Simplifies the process of service registration and decorations in ASP.NET Core applications. 
+
+## Implement Decorator Pattern using Scrutor Library 
+- Start with interface IBasketRepository and base implementation BasketRepository 
+- Create a decorator class like CachedBasketRepository that implements IBasketRepository but adds caching logic 
+- Register services with Scrutor. 
+- Use scrutor in Program.cs to first register the base service(BasketRepository) and then apply decorator(CachedBasketRepository) 
+```c#
+builder.Services.AddScoped<IBasketRepository,BasketRepository>();
+builder.Services.Decorate<IBasketRepository,CachedBasketRepository>();
+
+```
+- Implementation of Decorator Pattern using CachedBasketRepository 
+- CachedBasketRepository implements IBasketRepository and takes a primary constructor of IBasketRepository 
+- Here CachedBasketRepository acts as a proxy and forwards all incoming requests to the internal IBasketRepository object. 
+- It acts as a decorator and enhances the functionality of IBasketRepository 
+```c#
+ public class CachedBasketRepository(IBasketRepository repository) : IBasketRepository
+ {
+     public async Task<ShoppingCart> GetBasket(string userName, bool asNoTracking = true, CancellationToken cancellationToken = default)
+     {
+         return await repository.GetBasket(userName, asNoTracking, cancellationToken);
+     }
+     public async Task<ShoppingCart> CreateBasket(ShoppingCart basket, CancellationToken cancellationToken = default)
+     {
+         return await repository.CreateBasket(basket, cancellationToken);
+     }
+
+     public async Task<bool> DeleteBasket(string userName, CancellationToken cancellationToken = default)
+     {
+         return await repository.DeleteBasket(userName);
+     }
+
+   
+     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+     {
+         return await repository.SaveChangesAsync(cancellationToken);
+     }
+ }
+
+
+```
+## Using IDistributedCache 
+- The IDistributedCache interface in ASP.NET Core is used to interact with a distributed cache
+- A distributed cache is a cache shared by multiple application servers, typically maintained as an external service
+- This can improve the performance and scalability of an application, especially when hosted in a cloud service or a server farm
+- The IDistributedCache interface provides several methods to manipulate items in the distributed cache:
+- **Get / GetAsync**: Retrieves a cached item as a byte array if found in the cache
+- **Set / SetAsync**: Adds an item (as a byte array) to the cache using a string key
+- **Remove / RemoveAsync**: Removes a cache item based on its string key
+- **Refresh / RefreshAsync**: Refreshes an item in the cache, resetting its sliding expiration timeout (if any)
+- Using IDistributedCache allows you to **work with a distributed cache in a standardized way**, making it easier to **switch between different cache implementations** without changing your application code. 
+- Implementations of IDistributedCache can be Distributed Redis Cache, Distributed Memory Cache, Distributed SQL Server Cache, Distributed Cosmos DB Cache.
+- Need to install AddStackExchangeRedis packages 
+- Need to register these services 
+- Install Redis in Shared Library 
+- Cached Basket Repository will now use IDistributedCache as follows:
+```c#
+public class CachedBasketRepository(IBasketRepository repository, IDistributedCache cache) : IBasketRepository
+{
+    public async Task<ShoppingCart> GetBasket(string userName, bool asNoTracking = true, CancellationToken cancellationToken = default)
+    {
+        if(!asNoTracking)
+        {
+            return await repository.GetBasket(userName,false,cancellationToken);
+        }
+
+        var cachedBasket = await cache.GetStringAsync(userName,cancellationToken);
+        if(!string.IsNullOrEmpty(cachedBasket))
+        {
+            return JsonSerializer.Deserialize<ShoppingCart>(cachedBasket)!;
+        }
+        var basket = await repository.GetBasket(userName, asNoTracking, cancellationToken);
+        await cache.SetStringAsync(userName,JsonSerializer.Serialize(basket),cancellationToken);
+        return basket;
+    }
+    public async Task<ShoppingCart> CreateBasket(ShoppingCart basket, CancellationToken cancellationToken = default)
+    {
+        await repository.CreateBasket(basket, cancellationToken);
+        await cache.SetStringAsync(basket.UserName, JsonSerializer.Serialize(basket), cancellationToken);
+        return basket;
+    }
+
+    public async Task<bool> DeleteBasket(string userName, CancellationToken cancellationToken = default)
+    {
+        await repository.DeleteBasket(userName);
+        await cache.RemoveAsync(userName, cancellationToken);
+        return true;    
+    }
+
+  
+    public async Task<int> SaveChangesAsync(string? userName = null,CancellationToken cancellationToken = default)
+{
+    var result =  await repository.SaveChangesAsync(userName,cancellationToken);
+
+    //TODO: Clear Cache
+    if(userName != null)
+    {
+        await cache.RemoveAsync(userName,cancellationToken);
+    }
+
+    return result;
+}
+}
+
+```
+## Registering CachedBasketRepository and StackExchangeRedis
+- One way of registering a decorator class like CachedBasketRepository is like this 
+```c#
+ services.AddScoped<IBasketRepository,BasketRepository>();
+
+//Manual Decoration of Cached Basket Repository
+//This approach is not maintainable and scalable.
+//Solve this by using Scrutor Library
+ services.AddScoped<IBasketRepository>(provider =>
+ {
+   var basketRepository = provider.GetRequiredService<IBasketRepository>();
+     return new CachedBasketRepository(basketRepository,provider.GetRequiredService<IDistributedCache>());
+ });
+
+```
+- Second approach is to use Scrutor Library 
+- The Scrutor library is a useful tool for enhancing dependency injection in ASP.NET Core applications
+- It provides extensions for assembly scanning and decoration using Microsoft.Extensions.DependencyInjection
+- This can simplify the registration of services and improve the maintainability of your code.
+- Key Features:
+- Assembly Scanning: Automatically scans assemblies for types that implement specific interfaces and registers them with the dependency injection container
+- Type Decoration: Allows you to decorate already registered services with additional behavior, often using the decorator pattern
+- Simplifies Registration: Reduces boilerplate code for registering services.
+- Enhances Flexibility: Makes it easier to add cross-cutting concerns like logging, caching, or validation.
+- Improves Maintainability: Keeps your dependency injection configuration clean and organized.
+- Scrutor library adds 2 extension methods to IServiceCollection: Scan and Decorate
+- Scan is the entry point to setup your assembly scanning 
+- Decorate() -> It is used to decorate already registered services. 
+- Using scrutor library we can register CachedBasketRepository as follows:
+```c#
+  //Using scrutor library
+ services.Decorate<IBasketRepository,CachedBasketRepository>();
+
+```
+- Register Redis in Program.cs of Api Project as follows:
+```c#
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+});
+
+```
+- When we store data in redis cache, we are unable to convert the retrieved data using JsonDeserialize 
+- This is because our ShoppingCart and ShoppingCartItem have private setters due to us following the principles of domain driven design.
+- SO we need to develop a custom JsonConverter
+- We have the following ShoppingCart and ShoppingCartItem converters 
+```c#
+public class ShoppingCartConverter: JsonConverter<ShoppingCart>
+{
+    public override ShoppingCart? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var jsonDocument = JsonDocument.ParseValue(ref reader);
+        var rootElement = jsonDocument.RootElement;
+
+        var id = rootElement.GetProperty("id").GetGuid();
+        var userName = rootElement.GetProperty("userName").GetString();
+        var itemsElement = rootElement.GetProperty("items");
+
+        var shoppingCart = ShoppingCart.Create(id, userName);
+
+        var items = itemsElement.Deserialize<List<ShoppingCartItem>>(options);
+        if (items != null)
+        {
+            //set values of private fields
+            var itemsField = typeof(ShoppingCart).GetField("_items",BindingFlags.NonPublic | BindingFlags.Instance);
+            itemsField?.SetValue(shoppingCart, items);
+        }
+
+        return shoppingCart;
+    }
+
+    public override void Write(Utf8JsonWriter writer, ShoppingCart value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+
+        writer.WriteString("id",value.Id.ToString());
+        writer.WriteString("userName",value.UserName);
+        writer.WritePropertyName("items");
+        JsonSerializer.Serialize(writer,value.Items,options);
+
+        writer.WriteEndObject();
+    }
+}
+
+
+public class ShoppingCartItemConverter : JsonConverter<ShoppingCartItem>
+{
+    public override ShoppingCartItem? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var jsonDocument = JsonDocument.ParseValue(ref reader);
+        var rootElement = jsonDocument.RootElement;
+
+        var id = rootElement.GetProperty("id").GetGuid();
+        var shoppingCartId = rootElement.GetProperty("shoppingCartId").GetGuid();
+        var productId = rootElement.GetProperty("productId").GetGuid();
+        var quantity = rootElement.GetProperty("quantity").GetInt32();
+        var color = rootElement.GetProperty("color").GetString();
+        var price = rootElement.GetProperty("price").GetDecimal();
+        var productName = rootElement.GetProperty("productName").GetString();
+
+        return new ShoppingCartItem(id,shoppingCartId, productId,quantity,color,price,productName);
+
+    }
+
+    public override void Write(Utf8JsonWriter writer, ShoppingCartItem value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+
+        writer.WriteString("id", value.Id.ToString());
+        writer.WriteString("shoppingCartId",value.ShoppingCartId.ToString());
+        writer.WriteString("productId", value.ProductId.ToString());
+        writer.WriteNumber("quantity", value.Quantity);
+        writer.WriteString("color", value.Color);
+        writer.WriteNumber("price", value.Price);
+        writer.WriteString("productName", value.ProductName);
+
+        writer.WriteEndObject();
+
+    }
+}
+
+```
+- Now we can use these converters in CachedBasketRepository like this by passing JsonSerialization Options
+```c#
+public class CachedBasketRepository(IBasketRepository repository, IDistributedCache cache) : IBasketRepository
+{
+    private readonly JsonSerializerOptions _options = new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new ShoppingCartConverter(), new ShoppingCartItemConverter() }
+    };
+
+    public async Task<ShoppingCart> GetBasket(string userName, bool asNoTracking = true, CancellationToken cancellationToken = default)
+    {
+        if(!asNoTracking)
+        {
+            return await repository.GetBasket(userName,false,cancellationToken);
+        }
+
+        var cachedBasket = await cache.GetStringAsync(userName,cancellationToken);
+        if(!string.IsNullOrEmpty(cachedBasket))
+        {
+            //Deserialize
+            
+            return JsonSerializer.Deserialize<ShoppingCart>(cachedBasket,_options)!;
+        }
+        var basket = await repository.GetBasket(userName, asNoTracking, cancellationToken);
+        //Serialize
+        await cache.SetStringAsync(userName,JsonSerializer.Serialize(basket,_options),cancellationToken);
+        return basket;
+    }
+    public async Task<ShoppingCart> CreateBasket(ShoppingCart basket, CancellationToken cancellationToken = default)
+    {
+        await repository.CreateBasket(basket, cancellationToken);
+        await cache.SetStringAsync(basket.UserName, JsonSerializer.Serialize(basket,_options), cancellationToken);
+        return basket;
+    }
+
+    public async Task<bool> DeleteBasket(string userName, CancellationToken cancellationToken = default)
+    {
+        await repository.DeleteBasket(userName);
+        await cache.RemoveAsync(userName, cancellationToken);
+        return true;    
+    }
+
+  
+    public async Task<int> SaveChangesAsync(string? userName = null,CancellationToken cancellationToken = default)
+    {
+        var result =  await repository.SaveChangesAsync(userName,cancellationToken);
+
+        //TODO: Clear Cache
+        if(userName != null)
+        {
+            await cache.RemoveAsync(userName,cancellationToken);
+        }
+
+        return result;
+    }
+}
+
+
+```

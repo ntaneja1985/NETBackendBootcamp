@@ -1,6 +1,7 @@
 ﻿
 
 using Shared.DDD;
+using System.Text.Json.Serialization;
 
 namespace Basket.Basket.Models
 {
@@ -27,7 +28,19 @@ namespace Basket.Basket.Models
             Price = price;
             ProductName = productName;
         }
-        
+
+        [JsonConstructor]
+        public ShoppingCartItem(Guid id,Guid shoppingCartId, Guid productId, int quantity, string color, decimal price, string productName)
+        {
+            Id = id;
+            ShoppingCartId = shoppingCartId;
+            ProductId = productId;
+            Quantity = quantity;
+            Color = color;
+            Price = price;
+            ProductName = productName;
+        }
+
 
     }
 }
