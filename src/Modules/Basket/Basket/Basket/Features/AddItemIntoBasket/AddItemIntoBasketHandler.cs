@@ -1,4 +1,6 @@
-﻿namespace Basket.Basket.Features.AddItemIntoBasket
+﻿
+
+namespace Basket.Basket.Features.AddItemIntoBasket
 {
     public record AddItemIntoBasketCommand(string UserName, ShoppingCartItemDto ShoppingCartItem)
     : ICommand<AddItemIntoBasketResult>;
@@ -12,7 +14,7 @@
             RuleFor(x => x.ShoppingCartItem.Quantity).GreaterThan(0).WithMessage("Quantity must be greater than 0");
         }
     }
-    internal class AddItemIntoBasketHandler(IBasketRepository repository)
+    internal class AddItemIntoBasketHandler(IBasketRepository repository, ISender sender)
     : ICommandHandler<AddItemIntoBasketCommand, AddItemIntoBasketResult>
     {
         public async Task<AddItemIntoBasketResult> Handle(AddItemIntoBasketCommand command, CancellationToken cancellationToken)
@@ -27,16 +29,21 @@
             //    throw new BasketNotFoundException(command.UserName);
             //}
 
-            var shoppingCart = await repository.GetBasket(command.UserName,false,cancellationToken); 
+            var shoppingCart = await repository.GetBasket(command.UserName,false,cancellationToken);
 
-           
+            //TODO: Before adding item to shopping cart, we should call the Catalog Module GetProductById method
+            //Get latest product information and set Price and ProductName when adding item into the shopping cart.
+            var result = await sender.Send(new GetProductByIdQuery(command.ShoppingCartItem.ProductId));
 
             shoppingCart.AddItem(
                 command.ShoppingCartItem.ProductId,
                 command.ShoppingCartItem.Quantity,
                 command.ShoppingCartItem.Color,
-                command.ShoppingCartItem.Price,
-                command.ShoppingCartItem.ProductName);
+                //command.ShoppingCartItem.Price,
+                //command.ShoppingCartItem.ProductName
+                result.Product.Price,
+                result.Product.Name
+                );
 
             //await dbContext.SaveChangesAsync(cancellationToken);
             await repository.SaveChangesAsync(command.UserName, cancellationToken);

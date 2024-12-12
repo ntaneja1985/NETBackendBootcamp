@@ -2,7 +2,7 @@
 
 using FluentValidation;
 using MediatR;
-using Shared.CQRS;
+using Shared.Contracts.CQRS;
 using System.Windows.Input;
 
 namespace Shared.Behaviors

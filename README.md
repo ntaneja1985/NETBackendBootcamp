@@ -2843,3 +2843,119 @@ public class CachedBasketRepository(IBasketRepository repository, IDistributedCa
 
 
 ```
+
+## Sync Communications between Modules with In-Process Method Calls 
+- We will develop communication between catalog and basket module.
+- We can do it both synchronously and asynchronously 
+- Synchronous communication between modules can be done using Mediator In-Process Method Calls 
+- We can do synchronous communication between modules using Contracts Class Library 
+  1. Create Catalog.Contracts Class Library 
+  2. Move exposing MediatR method Query and Commands into Catalog.Contracts Class 
+  3. Split CQRS Contract related common operations into Shared.Contracts class library 
+  4. Modify Catalog Module getting reference from Catalog.Contracts Class Library 
+  5. In Basket, we will get reference from Catalog Contracts Class Library. 
+  6. GetProduct entity values into AddItemIntoBasketHandler and set Price and Product Name Information.
+  7. ![alt text](image-81.png)
+  8. In Modular Monolith, the modules communicate within the same process space, similar to monolithic application, but these
+     communication will be inter-process communication.
+  9. Inter-process communication is the mechanism provided by the operating system that allow processes to communicate with each other, so that means communication performs by method calls into the code.
+ 10. We will use mediator sender object to send method calls with loose coupling between modules.
+
+## How Modular Monolithic Architecture handles communication between modules 
+- Different modules often need to interact to fulfill business requirements 
+- Various methods for inter-module communication including synchronous and async methods.
+- Synchronous communication involves direct method calls between modules.
+- When one modules calls another method in another module, it waits(or blocks) until the called method completes its execution and returns a response.
+- ![alt text](image-82.png)
+- Easy to implement within a process .
+- In process method calls are a common way to achieve synchronous communication in a modular monolithic architecture. 
+- Each module exposes a set of public APIs that other modules can call. 
+- ![alt text](image-83.png)
+- These APIs are typically defined in interfaces ensuring a clear contract for interaction. 
+- Benefits: Performance, Simplicity, Ease of debugging and strong typing. 
+- ![alt text](image-84.png)
+
+### Let us say when we add an item to Basket, we dont want to use the price of the item that is being submitted from the Shopping Cart Dto.
+### We want to fetch it on the fly from the Catalog Module. Should we call the Catalog Module directly like this ?
+```c#
+//Dont do this
+var result = await sender.Send(new GetProductByIdQuery(id));
+```
+- The above approach is not correct as it leads to tight coupling between Catalog and Basket Module. 
+- Instead we should use in-process method calls to public APIs provided by each module. 
+- The underlying principle that governs this is the Dependency Inversion Principle. 
+- Dependency Inversion Principle states that High Level Modules should not depend on low level modules. 
+- ![alt text](image-85.png)
+- As per dependency inversion principles, we inject dependent classes via constructor. 
+- Lower level modules must depend on high level modules(interfaces)
+- Instead of modules depending on each other, they should communicate via Contracts class libraries.
+- Contracts libraries contain shared abstractions(like DTOs, Queries and Commands) that facilitate communication between modules. 
+- Allows modules to remain independent and loosely coupled similar to how microservices interact. 
+- Avoid direct references, instead expose methods via lightweight contracts class libraries following the DIP principle. 
+- ![alt text](image-86.png)
+- We will move query and command record types into separate contracts class libraries. 
+- Modules will references these contracts libraries to communicate synchronously via MediatR. 
+
+## Steps to implement Sync communication using contracts 
+1. Create Catalog.Contracts Class Library 
+2. Move exposing MediatR method or commands into Catalog.Contracts class library -same folder structure with feature use case folders
+3. Modify Catalog Module getting reference from Catalog.Contracts class library. 
+4. Basket Get Reference from Catalog.Contracts class library. 
+5. Basket use Query or Command record types to sync communication between Basket-Catalog to trigger GetProductById Handler class sending to GetProductById Query object into MediatR sender. 
+6. Get Product entity values into AddItemIntoBasket Handler and set Price and ProductName information when adding item into Shopping Cart.
+7. if we decide to migrate to microservices, these contracts class library can be used to expose HTTP APIs, ensuring a seamless transition to distribution systems. 
+
+- ![alt text](image-87.png)
+- ![alt text](image-88.png)
+- In Basket Module we add reference to Catalog.Contracts 
+```c#
+ internal class AddItemIntoBasketHandler(IBasketRepository repository, ISender sender)
+ : ICommandHandler<AddItemIntoBasketCommand, AddItemIntoBasketResult>
+ {
+     public async Task<AddItemIntoBasketResult> Handle(AddItemIntoBasketCommand command, CancellationToken cancellationToken)
+     {
+         // Add shopping cart item into shopping cart
+         //var shoppingCart = await dbContext.ShoppingCarts
+         //    .Include(x => x.Items)
+         //    .SingleOrDefaultAsync(x => x.UserName == command.UserName, cancellationToken);
+
+         //if (shoppingCart is null)
+         //{
+         //    throw new BasketNotFoundException(command.UserName);
+         //}
+
+         var shoppingCart = await repository.GetBasket(command.UserName,false,cancellationToken);
+
+         //TODO: Before adding item to shopping cart, we should call the Catalog Module GetProductById method
+         //Get latest product information and set Price and ProductName when adding item into the shopping cart.
+         var result = await sender.Send(new GetProductByIdQuery(command.ShoppingCartItem.ProductId));
+
+         shoppingCart.AddItem(
+             command.ShoppingCartItem.ProductId,
+             command.ShoppingCartItem.Quantity,
+             command.ShoppingCartItem.Color,
+             //command.ShoppingCartItem.Price,
+             //command.ShoppingCartItem.ProductName
+             result.Product.Price,
+             result.Product.Name
+             );
+
+         //await dbContext.SaveChangesAsync(cancellationToken);
+         await repository.SaveChangesAsync(command.UserName, cancellationToken);
+
+         return new AddItemIntoBasketResult(shoppingCart.Id);
+     }
+ }
+
+```
+
+- For Migration to Microservices we can do this 
+- ![alt text](image-89.png)
+- We will have to convert the contract based communication methods into RESTFul HTTP endpoints.
+- GetProductById query will become an HTTP endpoint. We can also use service discovery mechanisms.
+- Tools like consul and eureka can help with this.
+- We also may need an API Gateway. 
+- In process method calls can be converted into httpClient calls. 
+- We can also implement resilience patterns like circuit breaker using tools like Polly.
+
+## Async communication between modules using RabbitMq and MassTransit

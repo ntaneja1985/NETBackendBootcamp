@@ -1,8 +1,5 @@
 ﻿
-
-using MediatR;
-
-namespace Shared.CQRS
+namespace Shared.Contracts.CQRS
 {
     //Here Unit represents a void type since void is not a valid return type
     public interface ICommand : ICommand<Unit>
