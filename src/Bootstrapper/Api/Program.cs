@@ -1,7 +1,5 @@
 // initialize the web application builder.
 
-
-
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((context, config) =>
@@ -33,6 +31,12 @@ builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = builder.Configuration.GetConnectionString("Redis");
 });
+
+//Register Mass Transit Extension method to register Mass Transit with Assemblies
+//Providing the assemblies allows mass transit to scan these assemblies for consumers and other configurations
+//Only include those assemblies which need asynchronous communications
+//builder.Services.AddMassTransitWithAssemblies(catalogAssembly, basketAssembly);
+builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly});
 
 builder.Services
     .AddCatalogModule(builder.Configuration)

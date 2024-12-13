@@ -2959,3 +2959,273 @@ var result = await sender.Send(new GetProductByIdQuery(id));
 - We can also implement resilience patterns like circuit breaker using tools like Polly.
 
 ## Async communication between modules using RabbitMq and MassTransit
+- ![alt text](image-90.png)
+- ![alt text](image-91.png)
+- ![alt text](image-92.png)
+
+### Why use async communication
+- Decoupling: Async communication decouples the sender and receiver and allows them to operate independently
+- Scalability: By not waiting for responses, the system can handle more requests and scale effectively.
+- Resilience: If a module fails, messages can be retried or processed later, improving fault tolerance. 
+- Responsiveness: Users receive immediate feedback, even if operation takes time to complete.
+- Problem with highly coupled modules: 
+- ![alt text](image-93.png)
+
+### How to implement async communication
+1. Domain events lead to integration events
+- Here events indicate something significant has happened in the module like OrderPlaced or UserRegistered. 
+- We can use ProductPriceChanged Domain event that raise from Catalog module in Domain entities.
+- This leads to integration events which are intended to notify other modules about changes or actions such as ProductPriceUpdated or OrderShipped. 
+- We will handle domain event and publish it as an Integration Event.
+2. Use In-Memory service bus that can shift to Message Broker 
+- We will use MassTransit library which is a wrapper over various message brokers like RabbitMq and Kafka
+- For simplicity an in-memory message bus can be used to simulate async communication.
+
+### Fan-Out and Message Filtering with Pub/Sub Pattern
+- ![alt text](image-94.png)
+- Fan-out is a messaging pattern where **messages are fanned out to multiple destinations** in parallel.
+- Each of the destinations can work and process these messages in parallel.
+- Pub/Sub model is used to define a **topic** which is a **logical access point** to enable message communication asynchronously. 
+- Publisher sends message to the topic and message is immediatelt fanned out to all subscribers of the topic.
+- Each service can operate and scale independently.
+- Publisher and subscribers dont need to know who is publishing/consuming the message 
+- Delivering the same message to multiple subscribers or receivers is to use the Fanout Pub/Sub pattern.
+-  ![alt text](image-95.png)
+-  Pub/Sub model provides instant event notifications for distributed applications.
+-  A message topic provides a lightweight mechanism to broadcast event notifications. 
+-  ![alt text](image-96.png)
+-  Domain Event is within the same domain or bounded context. Integration events are used to communicate state changes between different bounded contexts or microservices. 
+- ![alt text](image-97.png)
+- We will use RabbitMq AMQP protocol which will consume ProductPriceChangedEvent from RabbitMq using MassTransit. 
+- For async communication we will use MassTransit which is an in-memory message bus and RabbitMq which is a message broker. 
+- ![alt text](image-98.png)
+- Pub/Sub pattern implements the event driven architecture. 
+- ![alt text](image-99.png)
+- We will create Shared.Messaging library which contains common integration events and Mass Transit configurations.
+- Create a Base Integration Event 
+```c#
+public record IntegrationEvent
+{
+    public Guid EventId => Guid.NewGuid();
+    public DateTime OccurredOn => DateTime.Now;
+
+    public string EventType => GetType().AssemblyQualifiedName;
+}
+
+```
+- Now develop ProductPriceChangedIntegrationEvent 
+```c#
+ public record ProductPriceChangedIntegrationEvent : IntegrationEvent
+{
+    public Guid ProductId { get; set; } = default!;
+    public string Name { get; set;} = default!;
+
+    public List<string> Category { get; set; } = default!;
+    public string Description { get; set;}= default!;
+
+    public string ImageFile { get; set;} = default!;
+
+    public decimal Price { get; set; } = default!;
+
+}
+
+
+```
+- Add MassTransit Nuget package in Shared.Messaging class library
+- Now add a MassTransitExtensions class. This class also extends IServiceCollection and has the configurations to setup masstransit. Initially we start by using In-Memory message bus and then we can use RabbitMq also.
+```c#
+  public static class MassTransitExtensions
+  {
+      public static IServiceCollection AddMassTransitWithAssemblies (this IServiceCollection services ,params Assembly[] assemblies)
+      {
+          //Implement Mass Transit configuration
+          services.AddMassTransit(config =>
+          {
+              config.SetKebabCaseEndpointNameFormatter();
+              config.SetInMemorySagaRepositoryProvider();
+              //consumer registration.
+              config.AddConsumers(assemblies);
+              config.AddSagaStateMachines(assemblies);
+              config.AddSagas(assemblies);
+              config.AddActivities(assemblies);
+              //use in-memory message broker suitable for initial setup
+              config.UsingInMemory((context, configurator) =>
+              {
+                  configurator.ConfigureEndpoints(context);
+              });
+
+
+          });
+          return services;
+      }
+  }
+
+```
+- Register this class in Program.cs of Api Project
+```c#
+//Register Mass Transit Extension method to register Mass Transit with Assemblies
+//Providing the assemblies allows mass transit to scan these assemblies for consumers and other configurations
+//Only include those assemblies which need asynchronous communications
+builder.Services.AddMassTransitWithAssemblies(catalogAssembly, basketAssembly);
+
+```
+- Now we will call the ProductPriceChanged Integration Event from the Handler for ProductPriceChanged Domain Event of Product
+```c#
+public class ProductPriceChangedEventHandler(ILogger<ProductPriceChangedEventHandler> logger, IBus bus) : INotificationHandler<ProductPriceChangedEvent>
+{
+    public async Task Handle(ProductPriceChangedEvent notification, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Domain Event handled: {DomainEvent}", notification.GetType().Name);
+        //Publish Product Price Changed Integration Event for Update Basket Prices
+        var integrationEvent = new ProductPriceChangedIntegrationEvent
+        {
+            ProductId = notification.product.Id,
+            Name = notification.product.Name,
+            Price = notification.product.Price,
+            ImageFile = notification.product.ImageFile,
+            Category = notification.product.Category,
+            Description = notification.product.Description
+
+        };
+
+        await bus.Publish(integrationEvent);
+    }
+}
+
+```
+- Now inside the Basket Module, we will consume the Product Price Changed Integration Event. 
+- In the Basket Event Handlers add a ProductPriceChangedIntegrationEventHandler like this
+```c#
+namespace Basket.Basket.EventHandlers
+{
+    public class ProductPriceChangedIntegrationEventHandler(ISender sender, ILogger<ProductPriceChangedIntegrationEventHandler> logger) : IConsumer<ProductPriceChangedIntegrationEvent>
+    {
+        public async Task Consume(ConsumeContext<ProductPriceChangedIntegrationEvent> context)
+        {
+            
+           logger.LogInformation("Integration Event handled: {IntegrationEvent}",context.Message.GetType().Name);
+            //Find basket items with Product Id and update Item Price
+            
+            //mediatr new command and handler to find products on basket and update the price.
+            var result = await sender.Send(new UpdateItemPriceInBasketCommand(context.Message.ProductId,context.Message.Price));
+            if(!result.IsSuccess)
+            {
+                logger.LogError("Error updating price in basket for productId: {ProductId}", context.Message.ProductId);
+            }
+            logger.LogInformation($"Price for the product Id: {context.Message.ProductId} updated in basket");
+        }
+    }
+}
+
+```
+
+- Now we will create an UpdateItemPriceInBasket Handler method like this
+```c#
+namespace Basket.Basket.Features.UpdateItemPriceInBasket
+{
+    public record UpdateItemPriceInBasketCommand(Guid ProductId, decimal Price): ICommand<UpdateItemPriceInBasketResult>;
+
+    public record UpdateItemPriceInBasketResult(bool IsSuccess);
+
+    public class UpdateItemPriceInBasketCommandValidator: AbstractValidator<UpdateItemPriceInBasketCommand>
+    {
+        public UpdateItemPriceInBasketCommandValidator()
+        {
+            RuleFor(x=>x.ProductId).NotEmpty().WithMessage("Product Id is required");
+            RuleFor(x => x.Price).GreaterThan(0).WithMessage("Price must be greater than zero");
+        }
+    }
+
+    public class UpdateItemPriceInBasketHandler(BasketDbContext basketDbContext) : ICommandHandler<UpdateItemPriceInBasketCommand, UpdateItemPriceInBasketResult>
+    {
+        public async Task<UpdateItemPriceInBasketResult> Handle(UpdateItemPriceInBasketCommand command, CancellationToken cancellationToken)
+        {
+            //Find shopping cart items with a given ProductId
+            var itemsToUpdate = await basketDbContext.ShoppingCartItems
+                                .Where(x=>x.ProductId == command.ProductId)
+                                .ToListAsync(cancellationToken);
+            if (!itemsToUpdate.Any())
+            {
+                return new UpdateItemPriceInBasketResult(false);
+            }
+            //Iterate over items and update price of every item with incoming command.Price 
+            foreach (var item in itemsToUpdate)
+            {
+                item.UpdatePrice(command.Price);
+            }
+            //save to database
+            await basketDbContext.SaveChangesAsync(cancellationToken);
+            //return result
+            return new UpdateItemPriceInBasketResult(true);
+        }
+    }
+}
+
+```
+- This method will update the price of the item in all the baskets. So to summarize
+- We update the Product Price and dispatch the ProductPriceChangedEvent.
+- Inside the ProductPriceChangedEventHandler we send the ProductPriceChangedIntegrationEventHandler using the IBus interface of MassTransit. 
+- Inside the Basket module, we develop the ProductPriceChangedIntegrationEventHandler and call the UpdateItemPriceInBasket Event Handler. This consumes the event from IConsumer interface of MassTransit.
+- In that event handler we update the item price in all baskets. 
+
+
+## RabbitMq
+- It is a message broker software that implements the Advanced Message Queuing Protocol(AMQP)
+- Allows sending and receiving message through queues.
+- All transactions can be **listed in a queue** until the source to be transmitted gets up.
+- Sender and Receiver are decoupled. 
+- Main components of RabbitMq are Producer, Consumer, Message, Exchange, Binding and FIFO. 
+- ![alt text](image-100.png)
+- Exchange decides where to send the messages. Makes decision according to the routing case. 
+- Bindings are links between exchanges and queues. 
+- In-Memory doesn't scale well, so for distributed communication we need RabbitMq. 
+
+## Setting up RabbitMq
+- Install MassTransit.RabbitMq nuget package in Shared.Messaging
+- Create RabbitMq Mass Transit Extension method
+```c#
+ public static class MassTransitExtensionsRabbitMq
+ {
+     public static IServiceCollection AddMassTransitRabbitMqWithAssemblies(this IServiceCollection services,IConfiguration configuration, params Assembly[] assemblies)
+     {
+         //Implement Mass Transit configuration
+         services.AddMassTransit(config =>
+         {
+             config.SetKebabCaseEndpointNameFormatter();
+             config.SetInMemorySagaRepositoryProvider();
+             //consumer registration.
+             config.AddConsumers(assemblies);
+             config.AddSagaStateMachines(assemblies);
+             config.AddSagas(assemblies);
+             config.AddActivities(assemblies);
+             //use rabbitmq message broker suitable for distributed setup
+             config.UsingRabbitMq((context, configurator) =>
+             {
+                 configurator.Host(new Uri(configuration["MessageBroker:Host"]!), host =>
+                 {
+                     host.Username(configuration["MessageBroker:UserName"]!);
+                     host.Username(configuration["MessageBroker:Password"]!);
+                 });
+                 configurator.ConfigureEndpoints(context);
+             });
+
+
+         });
+         return services;
+     }
+ }
+
+```
+- Add settings in appsettings.json
+```c#
+ "MessageBroker": {
+   "Host": "amqp://localhost:5672",
+   "Username": "guest",
+   "Password":  "guest"
+ },
+```
+- Now register the above Extension method in Program.cs of Api Project
+```c#
+builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly});
+```
+- Now we can setup rabbitmq in docker compose and run the sequence of events for Product Price Changed Event. 
