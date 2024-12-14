@@ -3229,3 +3229,191 @@ namespace Basket.Basket.Features.UpdateItemPriceInBasket
 builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly});
 ```
 - Now we can setup rabbitmq in docker compose and run the sequence of events for Product Price Changed Event. 
+
+## Develop User Identity Module with Keycloak Authentication.
+- ![alt text](image-101.png)
+- Keycloak Identity and Access Management
+- OAuth2.0 + Open ID Connect Flows with Keycloak
+- Keycloak as a backing service of Modular Monolith Modules.
+- Setup Keycloak into Docker-Compose file for Identity Provider as a backing service 
+- Setup Keycloak user identity database as a PostgresSql DB Identity Schema.
+- Create Realm, User and Client for OIDC with Keycloak Identity Provider 
+- Secure E-Shop modules with Keycloak Open ID Connect in AspNet.
+- JwtBearer Token for OIDC with Keycloak Identity 
+- Get Current User from Token with ClaimsPrincipal in Aspnet Authentication.
+- Secure Basket Endpoints with OIDC using keycloak
+
+## Keycloak Identity and Access Management
+- Open Source Identity and Access Management solution aimed at modern applications and services.
+- Provides comprehensive support for authentication and authorization using features such as SSO, Identity Brokering and Social Login.
+- Simplifies process of securing apps and services with minimal coding effort. 
+- Helps in SSO 
+- Integrates with Google, Facebook identity providers 
+- User Federation: Connect to existing user databases
+- Centralized Management: Manage all user identities and permissions in one place. 
+- Supports OAuth 2.0, OIDC, SAML 2.0
+- Capable of handling millions of users and requests
+- Easy to integrate with various applications and services. 
+- Has built in portal for managing realms, clients, roles and users 
+- Enforces strong password policies. Can configure password rules.
+- We will use docker compose file to manage keycloak deployment. 
+- We will also use Kubernetes nodes to protect our identity server and have a fallback mechanism.
+- K8s provides robust orchestration capabilities to ensure high availability, scalability and disaster recovery for Keycloak deployment.
+- We will use PostgresSql DB as backend database for keycloak. 
+- We will also use the integrated middleware for .NET SDK for secure and seamless integration with .NET applications 
+- We will use JwtBearer and OIDC Middleware to handle authentication and authorization.
+
+## Concepts of OAuth 2.0 and OIDC 
+- OAuth 2.0: Authorization framework that allows apps to obtain limited access to user accounts on HTTP service. 
+- It involves delegating user authentication to the service that hosts the user account and authorizing third-party apps to access the account.
+- Key concepts of OAuth 2.0: Resource Owner(who owns the resource), Client(person who needs access to protected resources), Authorization Server(identity server), Resource Server(hosts the protected resources). 
+- OIDC: Identity Layer built on top of OAuth2.0
+- It allows clients to verify identity of end user based on authentication performed by authorization server and to obtain basic profile information about the end-user. 
+- ID Token: JWT that contains user info 
+- UserInfo Endpoint: An endpoint that returns additional profile information about the user. 
+
+## OAuth 2.0 and OIDC Flows 
+- **Authorization Code Flow**
+- Client directs user to Keycloak login page 
+- User authenticates and consents .
+- Keycloak redirects the user to the client with authorization code 
+- Client exchanges authorization code for an access  token and ID token .
+- ![alt text](image-102.png)
+
+- **Implicit Flow (suitable for Single Page Apps)**
+- Here tokens are returned directly to the client 
+- It is less secure and not recommended. 
+
+- **Client Credential Flow**
+- Used for Machine to Machine communication. 
+- The client authenticates directly with Keycloak using its client ID and secret to obtain an access token.
+
+- **Resource Owner Password Credential Flow**
+- The client collects the user credentials and exchanges them for an access token. 
+- Flow is suitable only for highly trusted clients and is not recommended. 
+
+- **Open ID Connect Flow**
+- Extends the OAuth2.0 Authorization Code Flow to include an ID Token that contains user profile information. 
+- Flow is ideal for applications that need to verify user's identity and obtain basic profile information. 
+
+## Using Keycloak
+- ![alt text](image-103.png)
+- ![alt text](image-104.png)
+- Configure Keycloak in docker compose 
+- Launch Keycloak centralized management console 
+- ![alt text](image-105.png)
+- ![alt text](image-106.png)
+- Kerberos is mainly an authentication protocol ensuring secure and mutual authentication using a ticket-based system.
+- LDAP is a directory service protocol used to manage and query hierarchical data about users, groups, and other resources.
+- In many enterprise environments, these protocols are used together, where Kerberos handles secure authentication and LDAP manages user data and access policies. 
+- They complement each other to provide a robust security and directory management solution.
+- We need to **configure Keycloak in a persistent storage like PostgresSql** with its own schema called identity schema.
+- ![alt text](image-107.png)
+- Create identity schema in postgres
+```c#
+CREATE SCHEMA identity;
+GRANT ALL ON SCHEMA identity TO postgres;
+
+```
+- ![alt text](image-108.png)
+- Realms in keycloak allow us to manage a set of users, groups etc. 
+- We create a new realm in keycloak
+- what is realm in keycloak
+- In Keycloak, a realm is a fundamental concept that represents a logical space for managing users, groups, roles, clients, and other resources. 
+- Think of it as a container for all the security-related configurations and entities within your application environment
+- In Azure Active Directory (Azure AD), the **concept equivalent to a Keycloak realm is a tenant**. 
+- A tenant in Azure AD is a dedicated instance of the directory that an organization receives and manages, and it's used to isolate and manage the organization's resources, users, and applications.
+- Create a user in the realm 
+- Then hit the link: http://localhost:9090/realms/myrealm/account and login as that new user and we can configure the user accordingly.
+- We need to install Keycloak.AuthServices.Authentication nuget package. It allows us to integrate Keycloak as an identity provider in our application.
+- It adds an extension method AddKeycloakAuthentication() 
+- If we didnot have this package, we would have to do lot of work to configure OIDC in our application like this
+- ![alt text](image-109.png)
+- We need to add settings related to Keycloak in our appsettings.json like this 
+```c#
+ "Keycloak": {
+   "realm": "myrealm",
+   "auth-server-url": "http://localhost:9090/",
+   "ssl-required": "none",
+   "resource": "myclient",
+   "verify-token-audience": false,
+   "credentials": {
+     "secret": ""
+   },
+   "confidential-port": 0
+ },
+
+```
+- In Program.cs we just have write the following code:
+```c#
+//Add Keycloak Authentication
+builder.Services.AddKeycloakWebApiAuthentication(builder.Configuration);
+builder.Services.AddAuthorization();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+
+```
+- Now we can modify our Create Basket endpoint to require authorization. 
+- This can be done as follows:
+```c#
+class CreateBasketEndpoint : ICarterModule
+{
+    public void AddRoutes(IEndpointRouteBuilder app)
+    {
+        app.MapPost("/basket", async (CreateBasketRequest request, ISender sender) =>
+        {
+            var command = request.Adapt<CreateBasketCommand>();
+
+            var result = await sender.Send(command);
+
+            var response = result.Adapt<CreateBasketResponse>();
+
+            return Results.Created($"/basket/{response.Id}", response);
+        })
+    .Produces<CreateBasketResponse>(StatusCodes.Status201Created)
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .WithSummary("Create Basket")
+    .WithDescription("Create Basket")
+    .RequireAuthorization();
+    }
+}
+
+
+```
+- If we try to access this endpoint now we will get 401 Unauthorized 
+- To fix this we need to obtain bearer token
+- Bearer token can be obtained from the following OIDC endpoint exposed by Keycloak
+- ![alt text](image-110.png)
+- ![alt text](image-111.png)
+- ![alt text](image-112.png)
+- Now to utilize the user information from jwt token we can use ClaimsPrincipal like this 
+```c#
+class CreateBasketEndpoint : ICarterModule
+{
+    public void AddRoutes(IEndpointRouteBuilder app)
+    {
+        app.MapPost("/basket", async (CreateBasketRequest request, ISender sender, ClaimsPrincipal user) =>
+        {
+            var userName = user.Identity!.Name;
+            var updatedShoppingCart = request.ShoppingCart with { UserName = userName };
+
+            //var command = request.Adapt<CreateBasketCommand>();
+            var command = new CreateBasketCommand(updatedShoppingCart);
+
+            var result = await sender.Send(command);
+
+            var response = result.Adapt<CreateBasketResponse>();
+
+            return Results.Created($"/basket/{response.Id}", response);
+        })
+    .Produces<CreateBasketResponse>(StatusCodes.Status201Created)
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .WithSummary("Create Basket")
+    .WithDescription("Create Basket")
+    .RequireAuthorization();
+    }
+}
+
+```

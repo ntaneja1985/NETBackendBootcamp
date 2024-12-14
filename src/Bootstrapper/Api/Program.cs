@@ -1,5 +1,7 @@
 // initialize the web application builder.
 
+using Keycloak.AuthServices.Authentication;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((context, config) =>
@@ -38,6 +40,11 @@ builder.Services.AddStackExchangeRedisCache(options =>
 //builder.Services.AddMassTransitWithAssemblies(catalogAssembly, basketAssembly);
 builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly});
 
+
+//Add Keycloak Authentication
+builder.Services.AddKeycloakWebApiAuthentication(builder.Configuration);
+builder.Services.AddAuthorization();
+
 builder.Services
     .AddCatalogModule(builder.Configuration)
     .AddBasketModule(builder.Configuration)
@@ -64,6 +71,8 @@ app.UseExceptionHandler(options =>
 
 });
 
+app.UseAuthentication();
+app.UseAuthorization();
 
 app
     .UseCatalogModule()

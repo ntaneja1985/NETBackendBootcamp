@@ -20,7 +20,8 @@ namespace Basket.Basket.Features.GetBasket
             .Produces<GetBasketResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .WithSummary("Get Basket")
-            .WithDescription("Get Basket");
+            .WithDescription("Get Basket")
+            .RequireAuthorization();
         }
     }
 }
