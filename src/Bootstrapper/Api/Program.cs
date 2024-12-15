@@ -22,12 +22,13 @@ builder.Host.UseSerilog((context, config) =>
 //common services: carter, mediatr, fluentvalidation
 var catalogAssembly = typeof(CatalogModule).Assembly;
 var basketAssembly = typeof(BasketModule).Assembly;
+var orderingAssembly = typeof(OrderingModule).Assembly;
 
 builder.Services
-    .AddCarterWithAssemblies(catalogAssembly,basketAssembly);
+    .AddCarterWithAssemblies(catalogAssembly,basketAssembly, orderingAssembly);
 
 builder.Services
-    .AddMediatRWithAssemblies(catalogAssembly, basketAssembly);
+    .AddMediatRWithAssemblies(catalogAssembly, basketAssembly, orderingAssembly);
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {
@@ -38,7 +39,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
 //Providing the assemblies allows mass transit to scan these assemblies for consumers and other configurations
 //Only include those assemblies which need asynchronous communications
 //builder.Services.AddMassTransitWithAssemblies(catalogAssembly, basketAssembly);
-builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly});
+builder.Services.AddMassTransitRabbitMqWithAssemblies(builder.Configuration, new[] {basketAssembly,catalogAssembly,orderingAssembly});
 
 
 //Add Keycloak Authentication

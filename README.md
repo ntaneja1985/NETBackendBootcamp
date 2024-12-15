@@ -3417,3 +3417,204 @@ class CreateBasketEndpoint : ICarterModule
 }
 
 ```
+
+## Ordering Module with Vertical Slice Architecture 
+- ![alt text](image-113.png)
+- Order is an Aggregate Root 
+- Order and OrderItem has one to many relationship
+- Order contains a list of Order Items 
+- Order has information such as customerId, OrderName, Shipping Address, Billing Address, Payment,OrderStatus etc. 
+- It will have Order Created Domain Event which will trigger Order Created Integration Event 
+- We will also have CRUD operations such as GetOrderWithItems, UpdateOrder, DeleteOrder, AddItemToOrder, RemoveItemFromOrder 
+- We will consume Basket Checkout Event from RabbitMq 
+- We will perform Order fulfillment operations such as billing, shipment, notification
+- We will raise OrderCreated Domain Event that leads to integration events. 
+- ![alt text](image-114.png)
+- We will create Ordering Schema in the Database.
+- ![alt text](image-115.png)
+- We will create features like GetOrder and CreateOrder 
+- We will create Order Entity using Rich Domain Model
+- We will create Order Features, Events and Event Handlers just like Catalog Module. 
+
+## Outbox Pattern for Reliable Modular Monolith Messaging
+- Stored in Outbox table before being sent out to Message Broker.
+- Guarantees that messages are not lost even if the system crashes.
+- Messages are stored in a persistent store before being sent to the message broker.
+- ![alt text](image-116.png)
+- Client app will send Basket Checkout Command
+- Basket Checkout Command will be handled by Basket Module and it will remove the basket from the redis cache and at the same time store it in an outbox table.
+- Another process will read the Outbox table and publish BasketCheckoutIntegrationEvent to RabbitMq using MassTransit 
+- Ordering Module will consume this event and create an order in PostgresSql database- ordering schema 
+- ![alt text](image-117.png)  
+- Remember Mass Transit is an abstraction over message brokers 
+- We use MassTransit.RabbitMq
+
+## Dual Write Problem 
+- ![alt text](image-118.png)
+- This happens when application needs to change data in two different systems i.e a database and a message queue, if one of them fails, it can result in inconsistent data. 
+- Happens when we use a local transaction with each of the external system operations 
+- App needs to persistent data in database and send a message in Kafka to notify other systems.
+- If one of these 2 operations fail, data will become inconsistent. 
+- This can lead to data loss and corruption
+- Difficult to resolve and hard to fix 
+- To fix this we use **Transactional outbox pattern**
+- We have a outbox table in microservice databases 
+- Instead of sending out data to 2 different systems, we just send a single transaction that will store 2 separate copies of the data on the database. 
+- One copy is in the relevant database table and another copy is stored in outbox table that will publish to event bus. 
+- When API publishes event messages, we dont directly send them , instead the messages are persisted in a database table. 
+- After that we can have a job that publishes event to message broker in predefined timed intervals. 
+- Events are not directly written to an event bus, rather it is written to a table in the Outbox role of the service.
+- ![alt text](image-119.png)
+- However we have to be careful, Transactions performed before the event and event written to the outbox table are part of the same transaction scope. 
+- When a new order is added to the system, the process of adding the order and writing the Order_Created event to the outbox table is done in the same transaction to ensure the event is saved to the database. 
+- If one of the processes fail, it will rollback the entire transaction following the ACID principles.
+- The second step is to receive events written to the outbox pattern by an independent service and write them to the Event Bus. 
+- Another service listens and polls the Outbox table records and publish events.
+- Changes to CheckoutBasketHandler can be done as follows
+- ![alt text](image-120.png)
+```c#
+public record CheckoutBasketCommand(BasketCheckoutDto BasketCheckout)
+ : ICommand<CheckoutBasketResult>;
+public record CheckoutBasketResult(bool IsSuccess);
+public class CheckoutBasketCommandValidator : AbstractValidator<CheckoutBasketCommand>
+{
+    public CheckoutBasketCommandValidator()
+    {
+        RuleFor(x => x.BasketCheckout).NotNull().WithMessage("BasketCheckoutDto can't be null");
+        RuleFor(x => x.BasketCheckout.UserName).NotEmpty().WithMessage("UserName is required");
+    }
+}
+
+internal class CheckoutBasketHandler(BasketDbContext dbContext,IBasketRepository repository, IBus bus)
+    : ICommandHandler<CheckoutBasketCommand, CheckoutBasketResult>
+{
+    public async Task<CheckoutBasketResult> Handle(CheckoutBasketCommand command, CancellationToken cancellationToken)
+    {
+        // get existing basket with total price
+        // Set totalprice on basketcheckout event message
+        // send basket checkout event to rabbitmq using masstransit
+        // delete the basket
+
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            // Get existing basket with total price
+            var basket = await dbContext.ShoppingCarts
+                .Include(x => x.Items)
+                .SingleOrDefaultAsync(x => x.UserName == command.BasketCheckout.UserName, cancellationToken);
+
+            if (basket == null)
+            {
+                throw new BasketNotFoundException(command.BasketCheckout.UserName);
+            }
+
+            // Set total price on basket checkout event message
+            var eventMessage = command.BasketCheckout.Adapt<BasketCheckoutIntegrationEvent>();
+            eventMessage.TotalPrice = basket.TotalPrice;
+
+            // Write a message to the outbox
+            var outboxMessage = new OutboxMessage
+            {
+                Id = Guid.NewGuid(),
+                Type = typeof(BasketCheckoutIntegrationEvent).AssemblyQualifiedName!,
+                Content = JsonSerializer.Serialize(eventMessage),
+                OccuredOn = DateTime.UtcNow
+            };
+
+            dbContext.OutboxMessages.Add(outboxMessage);
+
+            // Delete the basket
+            dbContext.ShoppingCarts.Remove(basket);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return new CheckoutBasketResult(true);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new CheckoutBasketResult(false);
+        }
+
+        ///////////////////// CHECKOUT BASKET WITHOUT OUTBOX
+        //var basket =
+        //    await repository.GetBasket(command.BasketCheckout.UserName, true, cancellationToken);
+
+        //var eventMessage = command.BasketCheckout.Adapt<BasketCheckoutIntegrationEvent>();
+        //eventMessage.TotalPrice = basket.TotalPrice;
+
+        //await bus.Publish(eventMessage, cancellationToken);
+
+        //await repository.DeleteBasket(command.BasketCheckout.UserName, cancellationToken);
+
+        //return new CheckoutBasketResult(true);
+        ///////////////////// CHECKOUT BASKET WITHOUT OUTBOX
+    }
+}
+
+```
+- We can create an Outbox Processor as a background service like this to process messages stored in Outbox table 
+```c#
+    public class OutboxProcessor(IServiceProvider serviceProvider,IBus bus, ILogger<OutboxMessage> logger) 
+        : BackgroundService
+    {
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    using var scope = serviceProvider.CreateScope();
+                    var dbContext = scope.ServiceProvider.GetRequiredService<BasketDbContext>();
+                    var outboxMessages = await dbContext.OutboxMessages
+                        .Where(m => m.ProcessedOn == null)
+                        .ToListAsync(stoppingToken);
+                    foreach (var message in outboxMessages)
+                    {
+                        var eventType = Type.GetType(message.Type);
+                        if (eventType == null)
+                        {
+                            logger.LogWarning("Could not resolve type: {Type}", message.Type);
+                            continue;
+                        }
+
+                        var eventMessage = JsonSerializer.Deserialize(message.Content, eventType);
+                        if (eventMessage == null)
+                        {
+                            logger.LogWarning("Could not deserialize message: {Content}", message.Content);
+                            continue;
+                        }
+
+                        await bus.Publish(eventMessage, stoppingToken);
+
+                        message.ProcessedOn = DateTime.UtcNow;
+
+                        logger.LogInformation("Successfully processed outbox message with ID: {Id}", message.Id);
+
+                    }
+
+                    await dbContext.SaveChangesAsync(stoppingToken);
+
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error processing outbox messages");
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken); // Adjust the delay as needed
+            }
+        }
+    }
+}
+
+
+```
+- Next we need to register this outbox processor as a hosted service 
+```c#
+services.AddHostedService<OutboxProcessor>();
+
+```
+- ![alt text](image-122.png)
