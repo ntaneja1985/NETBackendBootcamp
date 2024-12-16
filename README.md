@@ -3618,3 +3618,76 @@ services.AddHostedService<OutboxProcessor>();
 
 ```
 - ![alt text](image-122.png)
+
+## Containerize and Orchestrate EShop Modular App in Docker Compose
+- ![alt text](image-123.png)
+- ![alt text](image-124.png)
+- The Refit library is a type-safe REST client for .NET, Xamarin, and .NET Core
+- Refit simplifies the process of consuming REST APIs by turning your REST API into a live interface
+- Type-Safe Interfaces: Define interfaces to represent your REST API endpoints. Refit generates the implementation at build time
+- HTTP Methods: Use attributes to define HTTP methods (GET, POST, PUT, DELETE) and endpoints
+- Dependency Injection: Easily integrate with ASP.NET Core's dependency injection system
+- HttpClient Integration: Uses HttpClient under the hood for making HTTP requests
+- Source Code Generation: Generates the REST client implementation at build time, reducing runtime overhead
+- Define the API Interface:
+  ```c#
+    public interface IGitHubApi
+    {
+    [Get("/users/{user}")]
+    Task<User> GetUser(string user);
+    }
+
+  ```
+- Create the Refit Client:
+```c#
+    var gitHubApi = RestService.For<IGitHubApi>("https://api.github.com");
+    var user = await gitHubApi.GetUser("octocat");
+```
+## Migrating to Microservices EShop Modules to Microservices with Strangler Fig Pattern 
+- ![alt text](image-125.png)
+### Challenges of Migration 
+- Splitting a monolithic application into smaller services can introduce significant complexity: architecture, deployment 
+- Data Management: Ensuring data consistency is a major concern particularly when dealing with distributed transactions 
+- Designing efficient communication between services is critical to maintain performance and reliability.
+- Managing multiple services requires robust deployment strategies and comprehensive monitoring solutions. 
+- Team coordination problems. 
+### Key considerations 
+- Business Priorities 
+- Use DDD to identify bounded contexts and define service boundaries 
+- Adcopt Incremental Approach 
+- Technology stack should support scalability, resilience and maintainability 
+
+### Strangler Fig Pattern 
+- Incremental migration to refactoring monolithic apps to microservices. 
+- Transforms a strangler(monolith) into a fig(microservice)
+- By incrementally migrating parts of the app, we reduce risk of system downtime and user disruption.
+- Existing monolithic app continues to function while individual modules are extracted as microservices. 
+- Gradual migration allows thorough testing.
+- ![alt text](image-126.png)
+- Identify Bounded Contexts: For EShop application, modules such as Catalog,Basket, Ordering can be considered as bounded contexts. 
+- Define Service boundaries: Each service should encapsulate business capability and be responsible for its own data. Remember separate schema ?
+- Prioritize Modules-Services for migration: Prioritize migration of less complex and highly decoupled modules. Also prioritize modules that have significant business impact.
+- Extract a Service from a monolith: Extract the code and data related to the chosen module from the monolith. 
+- Develop APIs for extracted service and ensure backward compatability. 
+- ![alt text](image-127.png)
+- Manage a monolithic database: Decompose monolithic database into smaller service specific databases.
+- Use strategies like schema separation, database replication, shared databases and eventual consistency. 
+- Implement data synchronization to keep data consistent across services during the transition period. 
+- Use change data capture(CDC) or event sourcing for real time data updates.
+- Design and implement interservice communication: Use Restful APIs or grpc for synchronous communication between services.
+- Design APIs with clear contracts and versioning to ensure compatibility. 
+- Implement message brokers like RabbitMq or Kafka for async communication. 
+- Use events and message queues to decouple services and improve resilience.
+- ![alt text](image-128.png)
+- Async communication between services: Design services to publish and subscribe to events using an event-driven architecture. 
+- This approach enhances decoupling and allows services to react to changes asynchronously.
+- Design services to handle data inconsistencies gracefully and ensure eventual resolution.
+- ![alt text](image-129.png)
+- Distributed transactions and data consistency: Implement the saga pattern to manage distributed transactions across multiple services.
+- Design compensating transactions to handle failures and ensure data consistency. 
+- Implement outbox pattern to reliably publish events as part of the transaction that updates the database.
+- ![alt text](image-130.png)
+- Deployment of microservices after monolithic: Containerize each microservice using Docker 
+- Use K8s for orchestration and scaling of containers. 
+- Implement CI/CD pipelines to automate the build, test and deployment processes. 
+- Implement monitoring and logging using tools like Prometheus, Graphana, ELK Stack for observability.
